@@ -30,7 +30,7 @@ while True:
     zoomed = apply_zoom(frame, zoom_pct)
     display = zoomed.copy()
 
-    help_lines = ["q: quit  s: save", f"+/-: zoom ({zoom_pct}%)"]
+    help_lines = ["Esc: quit  s: save", f"+/-: zoom ({zoom_pct}%)"]
     overlay = display.copy()
     cv2.rectangle(overlay, (5, 5), (170, 45), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.4, display, 0.6, 0, display)
@@ -48,7 +48,7 @@ while True:
     cv2.imshow("Lab 1 Camera", display)
 
     key = cv2.waitKey(1)
-    if key == ord("q"):
+    if key == 27:
         break
     elif key in (ord("+"), ord("=")):
         zoom_pct = min(200, zoom_pct + 10)
