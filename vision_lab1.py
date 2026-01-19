@@ -2,6 +2,7 @@
 # RBE 549 Lab 1: Experimental OpenCV App establishing the basics
 
 import cv2
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +22,7 @@ def apply_zoom(img, zoom_pct):
 
 cap = cv2.VideoCapture(0)
 zoom_pct = 100
+video = None
 
 while True:
     ret, frame = cap.read()
@@ -30,7 +32,12 @@ while True:
     zoomed = apply_zoom(frame, zoom_pct)
     display = zoomed.copy()
 
-    help_lines = ["Esc: quit  s: save", f"+/-: zoom ({zoom_pct}%)"]
+    if video:
+        if int(time.time()) % 3:  # Blinking recording indicator light
+            cv2.circle(display, (display.shape[1] - 20, 20), 8, (0, 0, 255), -1)
+        video.write(zoomed)
+
+    help_lines = ["Esc: quit  s: save  v: record", f"+/-: zoom ({zoom_pct}%)"]
     overlay = display.copy()
     cv2.rectangle(overlay, (5, 5), (170, 45), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.4, display, 0.6, 0, display)
@@ -71,6 +78,21 @@ while True:
         filename = CAPTURES_DIR / now.strftime("lab1_%Y-%m-%d_%H-%M-%S.jpg")
         cv2.imwrite(str(filename), stamped)
         print(f"Saved: {filename}")
+    elif key == ord("v"):
+        if video:
+            video.release()
+            video = None
+            print("Recording stopped")
+        else:
+            h, w = zoomed.shape[:2]
+            filename = CAPTURES_DIR / datetime.now().strftime(
+                "lab1_%Y-%m-%d_%H-%M-%S.mp4"
+            )
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            video = cv2.VideoWriter(str(filename), fourcc, 30, (w, h))
+            print(f"Recording: {filename}")
 
+if video:
+    video.release()
 cap.release()
 cv2.destroyAllWindows()
