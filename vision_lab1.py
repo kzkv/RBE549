@@ -24,7 +24,10 @@ cap = cv2.VideoCapture(0)
 fps = 30  # Camera reports incorrect FPS; 30 matches the actual delivery rate
 # TODO: reevaluate with the new camera hardware
 
-zoom_pct = 100
+state = {"zoom": 0}
+cv2.namedWindow("Lab 1 Camera")
+cv2.createTrackbar("Zoom, %: ", "Lab 1 Camera", 0, 100, lambda v: state.update(zoom=v))
+
 video = None
 
 while True:
@@ -32,6 +35,7 @@ while True:
     if not ret:
         break
 
+    zoom_pct = 100 + state["zoom"]
     zoomed = apply_zoom(frame, zoom_pct)
     display = zoomed.copy()
 
@@ -52,9 +56,9 @@ while True:
         )
         video.write(stamped)
 
-    help_lines = ["Esc: quit  s: save  v: record", f"+/-: zoom ({zoom_pct}%)"]
+    help_lines = ["Esc: quit  s: save  v: record  +/-: zoom"]
     overlay = display.copy()
-    cv2.rectangle(overlay, (5, 5), (170, 45), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (5, 5), (365, 25), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.4, display, 0.6, 0, display)
     for i, line in enumerate(help_lines):
         cv2.putText(
@@ -73,9 +77,11 @@ while True:
     if key == 27:
         break
     elif key in (ord("+"), ord("=")):
-        zoom_pct = min(200, zoom_pct + 10)
+        state["zoom"] = min(100, state["zoom"] + 10)
+        cv2.setTrackbarPos("Zoom, %: ", "Lab 1 Camera", state["zoom"])
     elif key in (ord("-"), ord("_")):
-        zoom_pct = max(100, zoom_pct - 10)
+        state["zoom"] = max(0, state["zoom"] - 10)
+        cv2.setTrackbarPos("Zoom, %: ", "Lab 1 Camera", state["zoom"])
     elif key == ord("s"):
         now = datetime.now()
         stamped = zoomed.copy()
