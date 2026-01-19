@@ -21,6 +21,9 @@ def apply_zoom(img, zoom_pct):
 
 
 cap = cv2.VideoCapture(0)
+fps = 30  # Camera reports incorrect FPS; 30 matches the actual delivery rate
+# TODO: reevaluate with the new camera hardware
+
 zoom_pct = 100
 video = None
 
@@ -35,7 +38,19 @@ while True:
     if video:
         if int(time.time()) % 3:  # Blinking recording indicator light
             cv2.circle(display, (display.shape[1] - 20, 20), 8, (0, 0, 255), -1)
-        video.write(zoomed)
+        h, w = zoomed.shape[:2]
+        stamped = zoomed.copy()
+        timestamp = datetime.now().strftime("%m %d '%y  %H:%M:%S")
+        cv2.putText(
+            stamped,
+            timestamp,
+            (w - 380, h - 30),
+            cv2.FONT_HERSHEY_PLAIN,
+            2.0,
+            (0, 165, 255),
+            3,
+        )
+        video.write(stamped)
 
     help_lines = ["Esc: quit  s: save  v: record", f"+/-: zoom ({zoom_pct}%)"]
     overlay = display.copy()
@@ -89,8 +104,8 @@ while True:
                 "lab1_%Y-%m-%d_%H-%M-%S.mp4"
             )
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            video = cv2.VideoWriter(str(filename), fourcc, 30, (w, h))
-            print(f"Recording: {filename}")
+            video = cv2.VideoWriter(str(filename), fourcc, fps, (w, h))
+            print(f"Recording: {filename} @ {fps}fps")
 
 if video:
     video.release()
