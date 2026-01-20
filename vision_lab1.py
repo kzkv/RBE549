@@ -58,7 +58,7 @@ while True:
 
     help_lines = ["Esc: quit  c: capture  v: record  +/-: zoom"]
     overlay = display.copy()
-    cv2.rectangle(overlay, (5, 5), (365, 25), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (5, 5), (395, 25), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.4, display, 0.6, 0, display)
     for i, line in enumerate(help_lines):
         cv2.putText(
