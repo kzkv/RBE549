@@ -56,7 +56,7 @@ while True:
         )
         video.write(stamped)
 
-    help_lines = ["Esc: quit  s: save  v: record  +/-: zoom"]
+    help_lines = ["Esc: quit  c: capture  v: record  +/-: zoom"]
     overlay = display.copy()
     cv2.rectangle(overlay, (5, 5), (365, 25), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.4, display, 0.6, 0, display)
@@ -82,7 +82,7 @@ while True:
     elif key in (ord("-"), ord("_")):
         state["zoom"] = max(0, state["zoom"] - 10)
         cv2.setTrackbarPos("Zoom, %: ", "Lab 1 Camera", state["zoom"])
-    elif key == ord("s"):
+    elif key == ord("c"):
         now = datetime.now()
         stamped = zoomed.copy()
         h, w = stamped.shape[:2]
