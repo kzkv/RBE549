@@ -20,6 +20,20 @@ TIMESTAMP_PADDING = 5
 BORDER_SIZE = 18
 BORDER_COLOR = (0, 0, 255)
 
+LOGO_PATH = Path("OpenCV.png")
+LOGO_HEIGHT = 80
+LOGO_ALPHA = 0.6
+
+
+def load_logo():
+    """Load and resize logo for blending."""
+    logo = cv2.imread(str(LOGO_PATH))
+    if logo is None:
+        return None
+
+    aspect = logo.shape[1] / logo.shape[0]
+    return cv2.resize(logo, (int(LOGO_HEIGHT * aspect), LOGO_HEIGHT))
+
 
 def draw_timestamp(img, include_seconds=True):
     """Draw timestamp at bottom right and return its ROI bounds (y1, y2, x1, x2)."""
@@ -70,6 +84,10 @@ cv2.createTrackbar("Zoom, %: ", "Lab 2 Camera", 0, 100, lambda v: state.update(z
 video = None
 flash_start_time = None
 
+logo = load_logo()
+if logo is not None:
+    logo_h, logo_w = logo.shape[:2]
+
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -92,6 +110,12 @@ while True:
     roi_h, roi_w = timestamp_roi.shape[:2]
     display[0:roi_h, display.shape[1] - roi_w : display.shape[1]] = timestamp_roi
 
+    # Blend logo at top left using addWeighted
+    if logo is not None:
+        roi = display[0:logo_h, 0:logo_w]
+        blended = cv2.addWeighted(roi, 1 - LOGO_ALPHA, logo, LOGO_ALPHA, 0)
+        display[0:logo_h, 0:logo_w] = blended
+
     # Apply flash effect if within flash duration
     if flash_start_time is not None:
         elapsed_ms = (time.time() - flash_start_time) * 1000
@@ -105,11 +129,12 @@ while True:
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
     help_pad = 5
+    disp_h = display.shape[0]
     overlay = display.copy()
     cv2.rectangle(
         overlay,
-        (help_pad, help_pad),
-        (help_w + 2 * help_pad, help_h + 2 * help_pad),
+        (help_pad, disp_h - help_h - 2 * help_pad),
+        (help_w + 2 * help_pad, disp_h - help_pad),
         (0, 0, 0),
         -1,
     )
@@ -117,7 +142,7 @@ while True:
     cv2.putText(
         display,
         help_text,
-        (help_pad + 5, help_h + help_pad),
+        (help_pad + 5, disp_h - help_pad - help_baseline),
         cv2.FONT_HERSHEY_PLAIN,
         1.0,
         (230, 230, 230),
