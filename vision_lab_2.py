@@ -17,6 +17,9 @@ TIMESTAMP_COLOR = (0, 165, 255)
 TIMESTAMP_THICKNESS = 3
 TIMESTAMP_PADDING = 5
 
+BORDER_SIZE = 18
+BORDER_COLOR = (0, 0, 255)
+
 
 def draw_timestamp(img, include_seconds=True):
     """Draw timestamp at bottom right and return its ROI bounds (y1, y2, x1, x2)."""
@@ -119,6 +122,16 @@ while True:
         1.0,
         (230, 230, 230),
         1,
+    )
+
+    display = cv2.copyMakeBorder(
+        display,
+        BORDER_SIZE,
+        BORDER_SIZE,
+        BORDER_SIZE,
+        BORDER_SIZE,
+        cv2.BORDER_CONSTANT,
+        value=BORDER_COLOR,
     )
 
     cv2.imshow("Lab 2 Camera", display)
