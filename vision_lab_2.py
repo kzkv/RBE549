@@ -11,6 +11,41 @@ CAPTURES_DIR.mkdir(exist_ok=True)
 
 FLASH_DURATION_MS = 100
 
+TIMESTAMP_FONT = cv2.FONT_HERSHEY_PLAIN
+TIMESTAMP_SCALE = 2.0
+TIMESTAMP_COLOR = (0, 165, 255)
+TIMESTAMP_THICKNESS = 3
+TIMESTAMP_PADDING = 5
+
+
+def draw_timestamp(img, include_seconds=True):
+    """Draw timestamp at bottom right and return its ROI bounds (y1, y2, x1, x2)."""
+    h, w = img.shape[:2]
+    fmt = "%m %d '%y  %H:%M:%S" if include_seconds else "%m %d '%y  %H:%M"
+    text = datetime.now().strftime(fmt)
+
+    (text_w, text_h), baseline = cv2.getTextSize(
+        text, TIMESTAMP_FONT, TIMESTAMP_SCALE, TIMESTAMP_THICKNESS
+    )
+
+    x = w - text_w - TIMESTAMP_PADDING
+    y = h - TIMESTAMP_PADDING - baseline
+    cv2.putText(
+        img,
+        text,
+        (x, y),
+        TIMESTAMP_FONT,
+        TIMESTAMP_SCALE,
+        TIMESTAMP_COLOR,
+        TIMESTAMP_THICKNESS,
+    )
+
+    roi_x1 = x - TIMESTAMP_PADDING
+    roi_x2 = w
+    roi_y1 = y - text_h - TIMESTAMP_PADDING
+    roi_y2 = h
+    return roi_y1, roi_y2, roi_x1, roi_x2
+
 
 def apply_zoom(img, zoom_pct):
     if zoom_pct == 100:
@@ -44,19 +79,15 @@ while True:
     if video:
         if int(time.time()) % 3:
             cv2.circle(display, (display.shape[1] - 20, 20), 8, (0, 0, 255), -1)
-        h, w = zoomed.shape[:2]
         stamped = zoomed.copy()
-        timestamp = datetime.now().strftime("%m %d '%y  %H:%M:%S")
-        cv2.putText(
-            stamped,
-            timestamp,
-            (w - 380, h - 30),
-            cv2.FONT_HERSHEY_PLAIN,
-            2.0,
-            (0, 165, 255),
-            3,
-        )
+        draw_timestamp(stamped, include_seconds=True)
         video.write(stamped)
+
+    # Draw timestamp and copy its ROI to top right
+    roi_y1, roi_y2, roi_x1, roi_x2 = draw_timestamp(display, include_seconds=True)
+    timestamp_roi = display[roi_y1:roi_y2, roi_x1:roi_x2].copy()
+    roi_h, roi_w = timestamp_roi.shape[:2]
+    display[0:roi_h, display.shape[1] - roi_w : display.shape[1]] = timestamp_roi
 
     # Apply flash effect if within flash duration
     if flash_start_time is not None:
@@ -66,20 +97,29 @@ while True:
         else:
             flash_start_time = None
 
-    help_lines = ["Esc: quit  c: capture  v: record  +/-: zoom"]
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom"
+    (help_w, help_h), help_baseline = cv2.getTextSize(
+        help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
+    )
+    help_pad = 5
     overlay = display.copy()
-    cv2.rectangle(overlay, (5, 5), (395, 25), (0, 0, 0), -1)
+    cv2.rectangle(
+        overlay,
+        (help_pad, help_pad),
+        (help_w + 2 * help_pad, help_h + 2 * help_pad),
+        (0, 0, 0),
+        -1,
+    )
     cv2.addWeighted(overlay, 0.4, display, 0.6, 0, display)
-    for i, line in enumerate(help_lines):
-        cv2.putText(
-            display,
-            line,
-            (10, 20 + i * 18),
-            cv2.FONT_HERSHEY_PLAIN,
-            1.0,
-            (230, 230, 230),
-            1,
-        )
+    cv2.putText(
+        display,
+        help_text,
+        (help_pad + 5, help_h + help_pad),
+        cv2.FONT_HERSHEY_PLAIN,
+        1.0,
+        (230, 230, 230),
+        1,
+    )
 
     cv2.imshow("Lab 2 Camera", display)
 
@@ -94,20 +134,9 @@ while True:
         cv2.setTrackbarPos("Zoom, %: ", "Lab 2 Camera", state["zoom"])
     elif key == ord("c"):
         flash_start_time = time.time()
-        now = datetime.now()
         stamped = zoomed.copy()
-        h, w = stamped.shape[:2]
-        timestamp = now.strftime("%m %d '%y  %H:%M")
-        cv2.putText(
-            stamped,
-            timestamp,
-            (w - 350, h - 30),
-            cv2.FONT_HERSHEY_PLAIN,
-            2.0,
-            (0, 165, 255),
-            3,
-        )
-        filename = CAPTURES_DIR / now.strftime("lab2_%Y-%m-%d_%H-%M-%S.jpg")
+        draw_timestamp(stamped, include_seconds=False)
+        filename = CAPTURES_DIR / datetime.now().strftime("lab2_%Y-%m-%d_%H-%M-%S.jpg")
         cv2.imwrite(str(filename), stamped)
         print(f"Saved: {filename}")
     elif key == ord("v"):
