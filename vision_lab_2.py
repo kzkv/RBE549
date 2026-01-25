@@ -116,7 +116,7 @@ def apply_zoom(img, zoom_pct):
 
 
 cap = cv2.VideoCapture(0)
-fps = 30
+fps = 30  # BRIO reports incorrect FPS (5.0); actual rate is 30
 
 THRESHOLD_TYPES = [
     (cv2.THRESH_BINARY, "BINARY"),
@@ -236,9 +236,27 @@ while True:
         display = cv2.addWeighted(display, 1 + amount, blurred, -amount, 0)
 
     if video:
-        if int(time.time()) % 3:
-            cv2.circle(display, (display.shape[1] - 20, 20), 8, (0, 0, 255), -1)
         stamped = zoomed.copy()
+        if state["rotation"] != 0:
+            h, w = stamped.shape[:2]
+            center = ((w - 1) / 2.0, (h - 1) / 2.0)
+            rot_matrix = cv2.getRotationMatrix2D(center, state["rotation"], 1.0)
+            stamped = cv2.warpAffine(stamped, rot_matrix, (w, h))
+        if state["extract_mode"] == "extracting" and state["target_hsv"] is not None:
+            mask = get_color_mask(stamped, state["target_hsv"])
+            stamped = cv2.bitwise_and(stamped, stamped, mask=mask)
+        if state["threshold_idx"] is not None:
+            thresh_type, _ = THRESHOLD_TYPES[state["threshold_idx"]]
+            gray = cv2.cvtColor(stamped, cv2.COLOR_BGR2GRAY)
+            _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
+            stamped = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
+        if state["blur_enabled"]:
+            sigma = state["blur_sigma"]
+            stamped = cv2.GaussianBlur(stamped, (0, 0), sigma, sigma)
+        elif state["sharpen_enabled"]:
+            amount = state["sharpen_amount"] / 10.0
+            blurred = cv2.GaussianBlur(stamped, (0, 0), 3)
+            stamped = cv2.addWeighted(stamped, 1 + amount, blurred, -amount, 0)
         draw_timestamp(stamped, include_seconds=True)
         video.write(stamped)
 
@@ -247,6 +265,10 @@ while True:
     timestamp_roi = display[roi_y1:roi_y2, roi_x1:roi_x2].copy()
     roi_h, roi_w = timestamp_roi.shape[:2]
     display[0:roi_h, display.shape[1] - roi_w : display.shape[1]] = timestamp_roi
+
+    # Recording indicator below the copied ROI
+    if video and int(time.time()) % 3:
+        cv2.circle(display, (display.shape[1] - 20, roi_h + 15), 8, (0, 0, 255), -1)
 
     # Blend logo at top left using addWeighted
     if logo is not None:
