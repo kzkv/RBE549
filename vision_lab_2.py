@@ -115,6 +115,37 @@ def apply_zoom(img, zoom_pct):
     return cv2.resize(cropped, (w, h))
 
 
+def apply_effects(img, state):
+    """Apply rotation, color extraction, thresholding, and blur/sharpen effects."""
+    result = img.copy()
+
+    if state["rotation"] != 0:
+        h, w = result.shape[:2]
+        center = ((w - 1) / 2.0, (h - 1) / 2.0)
+        rot_matrix = cv2.getRotationMatrix2D(center, state["rotation"], 1.0)
+        result = cv2.warpAffine(result, rot_matrix, (w, h))
+
+    if state["extract_mode"] == "extracting" and state["target_hsv"] is not None:
+        mask = get_color_mask(result, state["target_hsv"])
+        result = cv2.bitwise_and(result, result, mask=mask)
+
+    if state["threshold_idx"] is not None:
+        thresh_type, _ = THRESHOLD_TYPES[state["threshold_idx"]]
+        gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
+        result = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
+
+    if state["blur_enabled"]:
+        sigma = state["blur_sigma"]
+        result = cv2.GaussianBlur(result, (0, 0), sigma, sigma)
+    elif state["sharpen_enabled"]:
+        amount = state["sharpen_amount"] / 10.0
+        blurred = cv2.GaussianBlur(result, (0, 0), 3)
+        result = cv2.addWeighted(result, 1 + amount, blurred, -amount, 0)
+
+    return result
+
+
 cap = cv2.VideoCapture(0)
 fps = 30  # BRIO reports incorrect FPS (5.0); actual rate is 30
 
@@ -200,63 +231,18 @@ while True:
 
     zoom_pct = 100 + state["zoom"]
     zoomed = apply_zoom(frame, zoom_pct)
-    display = zoomed.copy()
 
-    # Apply rotation
-    if state["rotation"] != 0:
-        h, w = display.shape[:2]
-        center = ((w - 1) / 2.0, (h - 1) / 2.0)
-        rot_matrix = cv2.getRotationMatrix2D(center, state["rotation"], 1.0)
-        display = cv2.warpAffine(display, rot_matrix, (w, h))
-
-    # Color extraction mode
+    # Update color sample in sampling mode (before applying effects)
     if state["extract_mode"] == "sampling":
         mx, my = state["mouse_pos"]
-        mx = max(0, min(mx - BORDER_SIZE, display.shape[1] - 1))
-        my = max(0, min(my - BORDER_SIZE, display.shape[0] - 1))
-        state["target_hsv"] = sample_color_at(display, mx, my)
-    elif state["extract_mode"] == "extracting" and state["target_hsv"] is not None:
-        mask = get_color_mask(display, state["target_hsv"])
-        display = cv2.bitwise_and(display, display, mask=mask)
+        mx = max(0, min(mx - BORDER_SIZE, zoomed.shape[1] - 1))
+        my = max(0, min(my - BORDER_SIZE, zoomed.shape[0] - 1))
+        state["target_hsv"] = sample_color_at(zoomed, mx, my)
 
-    # Apply thresholding
-    if state["threshold_idx"] is not None:
-        thresh_type, _ = THRESHOLD_TYPES[state["threshold_idx"]]
-        gray = cv2.cvtColor(display, cv2.COLOR_BGR2GRAY)
-        _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
-        display = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
-
-    # Apply Gaussian blur or sharpening (mutually exclusive)
-    if state["blur_enabled"]:
-        sigma = state["blur_sigma"]
-        display = cv2.GaussianBlur(display, (0, 0), sigma, sigma)
-    elif state["sharpen_enabled"]:
-        amount = state["sharpen_amount"] / 10.0
-        blurred = cv2.GaussianBlur(display, (0, 0), 3)
-        display = cv2.addWeighted(display, 1 + amount, blurred, -amount, 0)
+    display = apply_effects(zoomed, state)
 
     if video:
-        stamped = zoomed.copy()
-        if state["rotation"] != 0:
-            h, w = stamped.shape[:2]
-            center = ((w - 1) / 2.0, (h - 1) / 2.0)
-            rot_matrix = cv2.getRotationMatrix2D(center, state["rotation"], 1.0)
-            stamped = cv2.warpAffine(stamped, rot_matrix, (w, h))
-        if state["extract_mode"] == "extracting" and state["target_hsv"] is not None:
-            mask = get_color_mask(stamped, state["target_hsv"])
-            stamped = cv2.bitwise_and(stamped, stamped, mask=mask)
-        if state["threshold_idx"] is not None:
-            thresh_type, _ = THRESHOLD_TYPES[state["threshold_idx"]]
-            gray = cv2.cvtColor(stamped, cv2.COLOR_BGR2GRAY)
-            _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
-            stamped = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
-        if state["blur_enabled"]:
-            sigma = state["blur_sigma"]
-            stamped = cv2.GaussianBlur(stamped, (0, 0), sigma, sigma)
-        elif state["sharpen_enabled"]:
-            amount = state["sharpen_amount"] / 10.0
-            blurred = cv2.GaussianBlur(stamped, (0, 0), 3)
-            stamped = cv2.addWeighted(stamped, 1 + amount, blurred, -amount, 0)
+        stamped = apply_effects(zoomed, state)
         draw_timestamp(stamped, include_seconds=True)
         video.write(stamped)
 
@@ -359,27 +345,7 @@ while True:
         cv2.setTrackbarPos("Zoom, %: ", "Lab 2 Camera", state["zoom"])
     elif key == ord("c"):
         flash_start_time = time.time()
-        stamped = zoomed.copy()
-        if state["rotation"] != 0:
-            h, w = stamped.shape[:2]
-            center = ((w - 1) / 2.0, (h - 1) / 2.0)
-            rot_matrix = cv2.getRotationMatrix2D(center, state["rotation"], 1.0)
-            stamped = cv2.warpAffine(stamped, rot_matrix, (w, h))
-        if state["extract_mode"] == "extracting" and state["target_hsv"] is not None:
-            mask = get_color_mask(stamped, state["target_hsv"])
-            stamped = cv2.bitwise_and(stamped, stamped, mask=mask)
-        if state["threshold_idx"] is not None:
-            thresh_type, _ = THRESHOLD_TYPES[state["threshold_idx"]]
-            gray = cv2.cvtColor(stamped, cv2.COLOR_BGR2GRAY)
-            _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
-            stamped = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
-        if state["blur_enabled"]:
-            sigma = state["blur_sigma"]
-            stamped = cv2.GaussianBlur(stamped, (0, 0), sigma, sigma)
-        elif state["sharpen_enabled"]:
-            amount = state["sharpen_amount"] / 10.0
-            blurred = cv2.GaussianBlur(stamped, (0, 0), 3)
-            stamped = cv2.addWeighted(stamped, 1 + amount, blurred, -amount, 0)
+        stamped = apply_effects(zoomed, state)
         draw_timestamp(stamped, include_seconds=False)
         filename = CAPTURES_DIR / datetime.now().strftime("lab2_%Y-%m-%d_%H-%M-%S.jpg")
         cv2.imwrite(str(filename), stamped)
