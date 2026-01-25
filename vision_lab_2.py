@@ -129,6 +129,9 @@ THRESHOLD_TYPES = [
 BLUR_SIGMA_MIN = 5
 BLUR_SIGMA_MAX = 30
 
+SHARPEN_AMOUNT_MIN = 5
+SHARPEN_AMOUNT_MAX = 30
+
 state = {
     "zoom": 0,
     "rotation": 0,
@@ -138,6 +141,8 @@ state = {
     "threshold_idx": None,  # None = off, 0-4 = index into THRESHOLD_TYPES
     "blur_enabled": False,
     "blur_sigma": BLUR_SIGMA_MIN,
+    "sharpen_enabled": False,
+    "sharpen_amount": SHARPEN_AMOUNT_MIN,
 }
 
 
@@ -162,6 +167,23 @@ def on_blur_sigma(v):
 
 cv2.createTrackbar(
     "Blur Sigma: ", "Lab 2 Camera", BLUR_SIGMA_MIN, BLUR_SIGMA_MAX, on_blur_sigma
+)
+
+
+def on_sharpen_amount(v):
+    if v < SHARPEN_AMOUNT_MIN:
+        cv2.setTrackbarPos("Sharpen: ", "Lab 2 Camera", SHARPEN_AMOUNT_MIN)
+        state["sharpen_amount"] = SHARPEN_AMOUNT_MIN
+    else:
+        state["sharpen_amount"] = v
+
+
+cv2.createTrackbar(
+    "Sharpen: ",
+    "Lab 2 Camera",
+    SHARPEN_AMOUNT_MIN,
+    SHARPEN_AMOUNT_MAX,
+    on_sharpen_amount,
 )
 
 video = None
@@ -204,10 +226,14 @@ while True:
         _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
         display = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
 
-    # Apply Gaussian blur
+    # Apply Gaussian blur or sharpening (mutually exclusive)
     if state["blur_enabled"]:
         sigma = state["blur_sigma"]
         display = cv2.GaussianBlur(display, (0, 0), sigma, sigma)
+    elif state["sharpen_enabled"]:
+        amount = state["sharpen_amount"] / 10.0
+        blurred = cv2.GaussianBlur(display, (0, 0), 3)
+        display = cv2.addWeighted(display, 1 + amount, blurred, -amount, 0)
 
     if video:
         if int(time.time()) % 3:
@@ -236,7 +262,7 @@ while True:
         else:
             flash_start_time = None
 
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: threshold  b: blur"
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp"
     (help_w, help_h), help_baseline = cv2.getTextSize(
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
@@ -328,6 +354,10 @@ while True:
         if state["blur_enabled"]:
             sigma = state["blur_sigma"]
             stamped = cv2.GaussianBlur(stamped, (0, 0), sigma, sigma)
+        elif state["sharpen_enabled"]:
+            amount = state["sharpen_amount"] / 10.0
+            blurred = cv2.GaussianBlur(stamped, (0, 0), 3)
+            stamped = cv2.addWeighted(stamped, 1 + amount, blurred, -amount, 0)
         draw_timestamp(stamped, include_seconds=False)
         filename = CAPTURES_DIR / datetime.now().strftime("lab2_%Y-%m-%d_%H-%M-%S.jpg")
         cv2.imwrite(str(filename), stamped)
@@ -359,9 +389,17 @@ while True:
     elif key == ord("b"):
         state["blur_enabled"] = not state["blur_enabled"]
         if state["blur_enabled"]:
+            state["sharpen_enabled"] = False
             print(f"Blur: enabled (sigma={state['blur_sigma']})")
         else:
             print("Blur: disabled")
+    elif key == ord("s"):
+        state["sharpen_enabled"] = not state["sharpen_enabled"]
+        if state["sharpen_enabled"]:
+            state["blur_enabled"] = False
+            print(f"Sharpen: enabled (amount={state['sharpen_amount'] / 10.0:.1f})")
+        else:
+            print("Sharpen: disabled")
     elif key == ord("v"):
         if video:
             video.release()
