@@ -126,6 +126,9 @@ THRESHOLD_TYPES = [
     (cv2.THRESH_TOZERO_INV, "TOZERO_INV"),
 ]
 
+BLUR_SIGMA_MIN = 5
+BLUR_SIGMA_MAX = 30
+
 state = {
     "zoom": 0,
     "rotation": 0,
@@ -133,6 +136,8 @@ state = {
     "mouse_pos": (0, 0),
     "target_hsv": None,
     "threshold_idx": None,  # None = off, 0-4 = index into THRESHOLD_TYPES
+    "blur_enabled": False,
+    "blur_sigma": BLUR_SIGMA_MIN,
 }
 
 
@@ -145,6 +150,19 @@ def on_mouse(event, x, y, flags, param):
 cv2.namedWindow("Lab 2 Camera")
 cv2.setMouseCallback("Lab 2 Camera", on_mouse)
 cv2.createTrackbar("Zoom, %: ", "Lab 2 Camera", 0, 100, lambda v: state.update(zoom=v))
+
+
+def on_blur_sigma(v):
+    if v < BLUR_SIGMA_MIN:
+        cv2.setTrackbarPos("Blur Sigma: ", "Lab 2 Camera", BLUR_SIGMA_MIN)
+        state["blur_sigma"] = BLUR_SIGMA_MIN
+    else:
+        state["blur_sigma"] = v
+
+
+cv2.createTrackbar(
+    "Blur Sigma: ", "Lab 2 Camera", BLUR_SIGMA_MIN, BLUR_SIGMA_MAX, on_blur_sigma
+)
 
 video = None
 flash_start_time = None
@@ -186,6 +204,11 @@ while True:
         _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
         display = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
 
+    # Apply Gaussian blur
+    if state["blur_enabled"]:
+        sigma = state["blur_sigma"]
+        display = cv2.GaussianBlur(display, (0, 0), sigma, sigma)
+
     if video:
         if int(time.time()) % 3:
             cv2.circle(display, (display.shape[1] - 20, 20), 8, (0, 0, 255), -1)
@@ -213,7 +236,7 @@ while True:
         else:
             flash_start_time = None
 
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: threshold"
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: threshold  b: blur"
     (help_w, help_h), help_baseline = cv2.getTextSize(
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
@@ -302,6 +325,9 @@ while True:
             gray = cv2.cvtColor(stamped, cv2.COLOR_BGR2GRAY)
             _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
             stamped = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
+        if state["blur_enabled"]:
+            sigma = state["blur_sigma"]
+            stamped = cv2.GaussianBlur(stamped, (0, 0), sigma, sigma)
         draw_timestamp(stamped, include_seconds=False)
         filename = CAPTURES_DIR / datetime.now().strftime("lab2_%Y-%m-%d_%H-%M-%S.jpg")
         cv2.imwrite(str(filename), stamped)
@@ -330,6 +356,12 @@ while True:
     elif key == ord("T"):
         state["threshold_idx"] = None
         print("Threshold: disabled")
+    elif key == ord("b"):
+        state["blur_enabled"] = not state["blur_enabled"]
+        if state["blur_enabled"]:
+            print(f"Blur: enabled (sigma={state['blur_sigma']})")
+        else:
+            print("Blur: disabled")
     elif key == ord("v"):
         if video:
             video.release()
