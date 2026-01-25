@@ -232,12 +232,18 @@ while True:
     zoom_pct = 100 + state["zoom"]
     zoomed = apply_zoom(frame, zoom_pct)
 
-    # Update color sample in sampling mode (before applying effects)
+    # Update color sample in sampling mode (sample from rotated image to match display)
     if state["extract_mode"] == "sampling":
+        sample_img = zoomed
+        if state["rotation"] != 0:
+            h, w = zoomed.shape[:2]
+            center = ((w - 1) / 2.0, (h - 1) / 2.0)
+            rot_matrix = cv2.getRotationMatrix2D(center, state["rotation"], 1.0)
+            sample_img = cv2.warpAffine(zoomed, rot_matrix, (w, h))
         mx, my = state["mouse_pos"]
-        mx = max(0, min(mx - BORDER_SIZE, zoomed.shape[1] - 1))
-        my = max(0, min(my - BORDER_SIZE, zoomed.shape[0] - 1))
-        state["target_hsv"] = sample_color_at(zoomed, mx, my)
+        mx = max(0, min(mx - BORDER_SIZE, sample_img.shape[1] - 1))
+        my = max(0, min(my - BORDER_SIZE, sample_img.shape[0] - 1))
+        state["target_hsv"] = sample_color_at(sample_img, mx, my)
 
     display = apply_effects(zoomed, state)
 
