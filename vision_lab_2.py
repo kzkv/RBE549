@@ -118,12 +118,21 @@ def apply_zoom(img, zoom_pct):
 cap = cv2.VideoCapture(0)
 fps = 30
 
+THRESHOLD_TYPES = [
+    (cv2.THRESH_BINARY, "BINARY"),
+    (cv2.THRESH_BINARY_INV, "BINARY_INV"),
+    (cv2.THRESH_TRUNC, "TRUNC"),
+    (cv2.THRESH_TOZERO, "TOZERO"),
+    (cv2.THRESH_TOZERO_INV, "TOZERO_INV"),
+]
+
 state = {
     "zoom": 0,
     "rotation": 0,
     "extract_mode": None,  # None, "sampling", or "extracting"
     "mouse_pos": (0, 0),
     "target_hsv": None,
+    "threshold_idx": None,  # None = off, 0-4 = index into THRESHOLD_TYPES
 }
 
 
@@ -170,6 +179,13 @@ while True:
         mask = get_color_mask(display, state["target_hsv"])
         display = cv2.bitwise_and(display, display, mask=mask)
 
+    # Apply thresholding
+    if state["threshold_idx"] is not None:
+        thresh_type, _ = THRESHOLD_TYPES[state["threshold_idx"]]
+        gray = cv2.cvtColor(display, cv2.COLOR_BGR2GRAY)
+        _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
+        display = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
+
     if video:
         if int(time.time()) % 3:
             cv2.circle(display, (display.shape[1] - 20, 20), 8, (0, 0, 255), -1)
@@ -197,7 +213,7 @@ while True:
         else:
             flash_start_time = None
 
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate"
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: threshold"
     (help_w, help_h), help_baseline = cv2.getTextSize(
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
@@ -281,6 +297,11 @@ while True:
         if state["extract_mode"] == "extracting" and state["target_hsv"] is not None:
             mask = get_color_mask(stamped, state["target_hsv"])
             stamped = cv2.bitwise_and(stamped, stamped, mask=mask)
+        if state["threshold_idx"] is not None:
+            thresh_type, _ = THRESHOLD_TYPES[state["threshold_idx"]]
+            gray = cv2.cvtColor(stamped, cv2.COLOR_BGR2GRAY)
+            _, threshed = cv2.threshold(gray, 127, 255, thresh_type)
+            stamped = cv2.cvtColor(threshed, cv2.COLOR_GRAY2BGR)
         draw_timestamp(stamped, include_seconds=False)
         filename = CAPTURES_DIR / datetime.now().strftime("lab2_%Y-%m-%d_%H-%M-%S.jpg")
         cv2.imwrite(str(filename), stamped)
@@ -299,6 +320,16 @@ while True:
     elif key == ord("R"):
         state["rotation"] = (state["rotation"] + ROTATION_STEP) % 360
         print(f"Rotation: {state['rotation']}° (CCW)")
+    elif key == ord("t"):
+        if state["threshold_idx"] is None:
+            state["threshold_idx"] = 0
+        else:
+            state["threshold_idx"] = (state["threshold_idx"] + 1) % len(THRESHOLD_TYPES)
+        _, name = THRESHOLD_TYPES[state["threshold_idx"]]
+        print(f"Threshold: {name}")
+    elif key == ord("T"):
+        state["threshold_idx"] = None
+        print("Threshold: disabled")
     elif key == ord("v"):
         if video:
             video.release()
