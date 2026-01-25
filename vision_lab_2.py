@@ -2,6 +2,7 @@
 # RBE 549 Lab 2: Basic and arithmetic operations on images
 
 import cv2
+import numpy as np
 import time
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,11 @@ LOGO_PATH = Path("OpenCV.png")
 LOGO_HEIGHT = 80
 LOGO_ALPHA = 0.6
 
+COLOR_SAMPLE_KERNEL = 11
+COLOR_HUE_TOLERANCE = 10
+COLOR_SAT_TOLERANCE = 50
+COLOR_VAL_TOLERANCE = 50
+
 
 def load_logo():
     """Load and resize logo for blending."""
@@ -33,6 +39,35 @@ def load_logo():
 
     aspect = logo.shape[1] / logo.shape[0]
     return cv2.resize(logo, (int(LOGO_HEIGHT * aspect), LOGO_HEIGHT))
+
+
+def sample_color_at(img, x, y, kernel_size=COLOR_SAMPLE_KERNEL):
+    """Sample average HSV color from a kernel region around (x, y)."""
+    h, w = img.shape[:2]
+    half = kernel_size // 2
+    x1, y1 = max(0, x - half), max(0, y - half)
+    x2, y2 = min(w, x + half + 1), min(h, y + half + 1)
+
+    region = img[y1:y2, x1:x2]
+    hsv_region = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    avg_hsv = hsv_region.mean(axis=(0, 1)).astype(int)
+    return avg_hsv
+
+
+def get_color_mask(img, target_hsv):
+    """Create a mask for pixels matching the target HSV color within tolerances."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    lower = np.array([
+        max(0, target_hsv[0] - COLOR_HUE_TOLERANCE),
+        max(0, target_hsv[1] - COLOR_SAT_TOLERANCE),
+        max(0, target_hsv[2] - COLOR_VAL_TOLERANCE),
+    ])
+    upper = np.array([
+        min(179, target_hsv[0] + COLOR_HUE_TOLERANCE),
+        min(255, target_hsv[1] + COLOR_SAT_TOLERANCE),
+        min(255, target_hsv[2] + COLOR_VAL_TOLERANCE),
+    ])
+    return cv2.inRange(hsv, lower, upper)
 
 
 def draw_timestamp(img, include_seconds=True):
@@ -77,8 +112,22 @@ def apply_zoom(img, zoom_pct):
 cap = cv2.VideoCapture(0)
 fps = 30
 
-state = {"zoom": 0}
+state = {
+    "zoom": 0,
+    "extract_mode": None,  # None, "sampling", or "extracting"
+    "mouse_pos": (0, 0),
+    "target_hsv": None,
+}
+
+
+def on_mouse(event, x, y, flags, param):
+    state["mouse_pos"] = (x, y)
+    if event == cv2.EVENT_LBUTTONDOWN and state["extract_mode"] == "sampling":
+        state["extract_mode"] = "extracting"
+
+
 cv2.namedWindow("Lab 2 Camera")
+cv2.setMouseCallback("Lab 2 Camera", on_mouse)
 cv2.createTrackbar("Zoom, %: ", "Lab 2 Camera", 0, 100, lambda v: state.update(zoom=v))
 
 video = None
@@ -96,6 +145,16 @@ while True:
     zoom_pct = 100 + state["zoom"]
     zoomed = apply_zoom(frame, zoom_pct)
     display = zoomed.copy()
+
+    # Color extraction mode
+    if state["extract_mode"] == "sampling":
+        mx, my = state["mouse_pos"]
+        mx = max(0, min(mx - BORDER_SIZE, display.shape[1] - 1))
+        my = max(0, min(my - BORDER_SIZE, display.shape[0] - 1))
+        state["target_hsv"] = sample_color_at(display, mx, my)
+    elif state["extract_mode"] == "extracting" and state["target_hsv"] is not None:
+        mask = get_color_mask(display, state["target_hsv"])
+        display = cv2.bitwise_and(display, display, mask=mask)
 
     if video:
         if int(time.time()) % 3:
@@ -124,7 +183,7 @@ while True:
         else:
             flash_start_time = None
 
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom"
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract color"
     (help_w, help_h), help_baseline = cv2.getTextSize(
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
@@ -148,6 +207,33 @@ while True:
         (230, 230, 230),
         1,
     )
+
+    # Show sampling preview with kernel outline and color swatch
+    if state["extract_mode"] == "sampling" and state["target_hsv"] is not None:
+        mx, my = state["mouse_pos"]
+        mx = max(0, min(mx - BORDER_SIZE, display.shape[1] - 1))
+        my = max(0, min(my - BORDER_SIZE, display.shape[0] - 1))
+        half = COLOR_SAMPLE_KERNEL // 2
+        cv2.rectangle(
+            display, (mx - half, my - half), (mx + half, my + half), (0, 255, 0), 2
+        )
+        bgr_color = cv2.cvtColor(
+            np.array([[state["target_hsv"]]], dtype=np.uint8), cv2.COLOR_HSV2BGR
+        )[0, 0]
+        cv2.rectangle(
+            display,
+            (mx + half + 5, my - half),
+            (mx + half + 35, my + half),
+            bgr_color.tolist(),
+            -1,
+        )
+        cv2.rectangle(
+            display,
+            (mx + half + 5, my - half),
+            (mx + half + 35, my + half),
+            (255, 255, 255),
+            1,
+        )
 
     display = cv2.copyMakeBorder(
         display,
@@ -177,6 +263,14 @@ while True:
         filename = CAPTURES_DIR / datetime.now().strftime("lab2_%Y-%m-%d_%H-%M-%S.jpg")
         cv2.imwrite(str(filename), stamped)
         print(f"Saved: {filename}")
+    elif key == ord("e"):
+        if state["extract_mode"] is None:
+            state["extract_mode"] = "sampling"
+            print("Color extraction: sampling mode - click to select color")
+        else:
+            state["extract_mode"] = None
+            state["target_hsv"] = None
+            print("Color extraction: disabled")
     elif key == ord("v"):
         if video:
             video.release()
