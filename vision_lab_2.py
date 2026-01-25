@@ -30,6 +30,8 @@ COLOR_HUE_TOLERANCE = 10
 COLOR_SAT_TOLERANCE = 50
 COLOR_VAL_TOLERANCE = 50
 
+ROTATION_STEP = 10
+
 
 def load_logo():
     """Load and resize logo for blending."""
@@ -57,16 +59,20 @@ def sample_color_at(img, x, y, kernel_size=COLOR_SAMPLE_KERNEL):
 def get_color_mask(img, target_hsv):
     """Create a mask for pixels matching the target HSV color within tolerances."""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    lower = np.array([
-        max(0, target_hsv[0] - COLOR_HUE_TOLERANCE),
-        max(0, target_hsv[1] - COLOR_SAT_TOLERANCE),
-        max(0, target_hsv[2] - COLOR_VAL_TOLERANCE),
-    ])
-    upper = np.array([
-        min(179, target_hsv[0] + COLOR_HUE_TOLERANCE),
-        min(255, target_hsv[1] + COLOR_SAT_TOLERANCE),
-        min(255, target_hsv[2] + COLOR_VAL_TOLERANCE),
-    ])
+    lower = np.array(
+        [
+            max(0, target_hsv[0] - COLOR_HUE_TOLERANCE),
+            max(0, target_hsv[1] - COLOR_SAT_TOLERANCE),
+            max(0, target_hsv[2] - COLOR_VAL_TOLERANCE),
+        ]
+    )
+    upper = np.array(
+        [
+            min(179, target_hsv[0] + COLOR_HUE_TOLERANCE),
+            min(255, target_hsv[1] + COLOR_SAT_TOLERANCE),
+            min(255, target_hsv[2] + COLOR_VAL_TOLERANCE),
+        ]
+    )
     return cv2.inRange(hsv, lower, upper)
 
 
@@ -114,6 +120,7 @@ fps = 30
 
 state = {
     "zoom": 0,
+    "rotation": 0,
     "extract_mode": None,  # None, "sampling", or "extracting"
     "mouse_pos": (0, 0),
     "target_hsv": None,
@@ -145,6 +152,13 @@ while True:
     zoom_pct = 100 + state["zoom"]
     zoomed = apply_zoom(frame, zoom_pct)
     display = zoomed.copy()
+
+    # Apply rotation
+    if state["rotation"] != 0:
+        h, w = display.shape[:2]
+        center = ((w - 1) / 2.0, (h - 1) / 2.0)
+        rot_matrix = cv2.getRotationMatrix2D(center, state["rotation"], 1.0)
+        display = cv2.warpAffine(display, rot_matrix, (w, h))
 
     # Color extraction mode
     if state["extract_mode"] == "sampling":
@@ -183,7 +197,7 @@ while True:
         else:
             flash_start_time = None
 
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract color"
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate"
     (help_w, help_h), help_baseline = cv2.getTextSize(
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
@@ -259,6 +273,14 @@ while True:
     elif key == ord("c"):
         flash_start_time = time.time()
         stamped = zoomed.copy()
+        if state["rotation"] != 0:
+            h, w = stamped.shape[:2]
+            center = ((w - 1) / 2.0, (h - 1) / 2.0)
+            rot_matrix = cv2.getRotationMatrix2D(center, state["rotation"], 1.0)
+            stamped = cv2.warpAffine(stamped, rot_matrix, (w, h))
+        if state["extract_mode"] == "extracting" and state["target_hsv"] is not None:
+            mask = get_color_mask(stamped, state["target_hsv"])
+            stamped = cv2.bitwise_and(stamped, stamped, mask=mask)
         draw_timestamp(stamped, include_seconds=False)
         filename = CAPTURES_DIR / datetime.now().strftime("lab2_%Y-%m-%d_%H-%M-%S.jpg")
         cv2.imwrite(str(filename), stamped)
@@ -271,6 +293,12 @@ while True:
             state["extract_mode"] = None
             state["target_hsv"] = None
             print("Color extraction: disabled")
+    elif key == ord("r"):
+        state["rotation"] = (state["rotation"] - ROTATION_STEP) % 360
+        print(f"Rotation: {state['rotation']}° (CW)")
+    elif key == ord("R"):
+        state["rotation"] = (state["rotation"] + ROTATION_STEP) % 360
+        print(f"Rotation: {state['rotation']}° (CCW)")
     elif key == ord("v"):
         if video:
             video.release()
