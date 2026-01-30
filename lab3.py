@@ -35,10 +35,12 @@ def setup_trackbars(window_name, state):
 
 def apply_effects(img, state):
     """Apply Lab 3 gradient/edge effects."""
-    if state["gradient_mode"] == "sobel_x":
+    mode = state["gradient_mode"]
+    if mode in ("sobel_x", "sobel_y"):
         ksize = state["sobel_ksize"]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        sobel = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=ksize)
+        dx, dy = (1, 0) if mode == "sobel_x" else (0, 1)
+        sobel = cv2.Sobel(gray, cv2.CV_64F, dx, dy, ksize=ksize)
         sobel = np.uint8(np.absolute(sobel))
         return cv2.cvtColor(sobel, cv2.COLOR_GRAY2BGR)
     return img
@@ -53,16 +55,21 @@ def handle_key(key, state):
             print("Gradient: disabled")
         else:
             state["gradient_pending"] = True
-            print("Gradient: press x for Sobel X")
+            print("Gradient: press x for Sobel X, y for Sobel Y")
         return True
 
-    if state["gradient_pending"]:
+    if state["gradient_pending"] or state["gradient_mode"] in ("sobel_x", "sobel_y"):
         if key == ord("x"):
             state["gradient_mode"] = "sobel_x"
             state["gradient_pending"] = False
             print("Gradient: Sobel X enabled")
             return True
-        elif key != -1:
+        elif key == ord("y"):
+            state["gradient_mode"] = "sobel_y"
+            state["gradient_pending"] = False
+            print("Gradient: Sobel Y enabled")
+            return True
+        elif state["gradient_pending"] and key != -1:
             state["gradient_pending"] = False
             print("Gradient: cancelled")
             return True
