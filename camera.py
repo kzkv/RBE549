@@ -7,6 +7,7 @@ from pathlib import Path
 
 import lab1
 import lab2
+import lab3
 
 WINDOW_NAME = "RBE 549 Camera"
 CAPTURES_DIR = Path("captures")
@@ -20,12 +21,13 @@ def create_state():
     state = {}
     state.update(lab1.init_state())
     state.update(lab2.init_state())
+    state.update(lab3.init_state())
     return state
 
 
 def draw_help_text(display):
     """Draw keyboard shortcuts legend at bottom left."""
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp"
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp  g+x: sobelX"
     (help_w, help_h), help_baseline = cv2.getTextSize(
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
@@ -58,6 +60,7 @@ def main():
     cv2.namedWindow(WINDOW_NAME)
     lab1.setup_trackbars(WINDOW_NAME, state)
     lab2.setup_trackbars(WINDOW_NAME, state)
+    lab3.setup_trackbars(WINDOW_NAME, state)
     lab2.setup_mouse_callback(WINDOW_NAME, state)
 
     logo, logo_h, logo_w = lab2.load_logo()
@@ -74,10 +77,12 @@ def main():
         lab2.update_color_sample(zoomed, state)
 
         display = lab2.apply_effects(zoomed, state)
+        display = lab3.apply_effects(display, state)
 
         # Video recording
         if video:
             stamped = lab2.apply_effects(zoomed, state)
+            stamped = lab3.apply_effects(stamped, state)
             lab1.draw_timestamp(stamped, include_seconds=True)
             video.write(stamped)
 
@@ -113,10 +118,15 @@ def main():
         if lab2.handle_key(key, state):
             continue
 
+        # Lab 3 keys
+        if lab3.handle_key(key, state):
+            continue
+
         # Shared keys
         if key == ord("c"):
             lab2.trigger_flash(state)
             stamped = lab2.apply_effects(zoomed, state)
+            stamped = lab3.apply_effects(stamped, state)
             lab1.draw_timestamp(stamped, include_seconds=False)
             filename = CAPTURES_DIR / datetime.now().strftime(
                 "capture_%Y-%m-%d_%H-%M-%S.jpg"
