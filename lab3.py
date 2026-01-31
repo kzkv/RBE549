@@ -11,7 +11,7 @@ SOBEL_KERNEL_X = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float64
 
 SOBEL_KERNEL_Y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float64)
 
-LAPLACIAN_KERNEL = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float64)
+LAPLACIAN_KERNEL = np.array([[2, 0, 2], [0, -8, 0], [2, 0, 2]], dtype=np.float64)
 
 CANNY_THRESH_MIN = 1
 CANNY_THRESH_MAX = 5000
@@ -28,6 +28,7 @@ def init_state():
         "canny_enabled": False,
         "canny_thresh1": CANNY_THRESH1_DEFAULT,
         "canny_thresh2": CANNY_THRESH2_DEFAULT,
+        "laplacian_enabled": False,
         "custom_mode": None,
     }
 
@@ -104,6 +105,13 @@ def apply_effects(img, state):
         sobel = cv2.Sobel(gray, cv2.CV_64F, dx, dy, ksize=ksize)
         sobel = np.uint8(np.absolute(sobel))
         return cv2.cvtColor(sobel, cv2.COLOR_GRAY2BGR)
+    if state["laplacian_enabled"]:
+        ksize = state["sobel_ksize"]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        lap = cv2.Laplacian(gray, cv2.CV_64F, ksize=ksize)
+        lap = np.uint8(np.absolute(lap))
+        return cv2.cvtColor(lap, cv2.COLOR_GRAY2BGR)
     if state["canny_enabled"]:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, state["canny_thresh1"], state["canny_thresh2"])
@@ -123,6 +131,18 @@ def handle_key(key, state):
             print(f"Custom: {state['custom_mode']}")
         else:
             print("Custom: disabled")
+        return True
+
+    if key == ord("l"):
+        state["laplacian_enabled"] = not state["laplacian_enabled"]
+        if state["laplacian_enabled"]:
+            state["gradient_mode"] = None
+            state["gradient_pending"] = False
+            state["canny_enabled"] = False
+            state["custom_mode"] = None
+            print("Laplacian: enabled")
+        else:
+            print("Laplacian: disabled")
         return True
 
     if key == ord("d"):
