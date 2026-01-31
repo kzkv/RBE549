@@ -9,6 +9,7 @@ import lab1
 import lab2
 import lab3
 
+CAMERA_INDEX = 0
 WINDOW_NAME = "RBE 549 Camera"
 CAPTURES_DIR = Path("captures")
 CAPTURES_DIR.mkdir(exist_ok=True)
@@ -54,7 +55,7 @@ def draw_help_text(display):
 
 
 def main():
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(CAMERA_INDEX)
     state = create_state()
 
     cv2.namedWindow(WINDOW_NAME)
