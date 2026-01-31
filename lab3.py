@@ -7,13 +7,11 @@ import numpy as np
 SOBEL_KSIZE_MIN = 1
 SOBEL_KSIZE_MAX = 7
 
-SOBEL_KERNEL_X = np.array([[-1, 0, 1],
-                           [-2, 0, 2],
-                           [-1, 0, 1]], dtype=np.float64)
+SOBEL_KERNEL_X = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float64)
 
-SOBEL_KERNEL_Y = np.array([[-1, -2, -1],
-                           [ 0,  0,  0],
-                           [ 1,  2,  1]], dtype=np.float64)
+SOBEL_KERNEL_Y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float64)
+
+LAPLACIAN_KERNEL = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float64)
 
 CANNY_THRESH_MIN = 1
 CANNY_THRESH_MAX = 5000
@@ -62,10 +60,18 @@ def setup_trackbars(window_name, state):
         state["canny_thresh2"] = v
 
     cv2.createTrackbar(
-        "Canny T1: ", window_name, CANNY_THRESH1_DEFAULT, CANNY_THRESH_MAX, on_canny_thresh1
+        "Canny T1: ",
+        window_name,
+        CANNY_THRESH1_DEFAULT,
+        CANNY_THRESH_MAX,
+        on_canny_thresh1,
     )
     cv2.createTrackbar(
-        "Canny T2: ", window_name, CANNY_THRESH2_DEFAULT, CANNY_THRESH_MAX, on_canny_thresh2
+        "Canny T2: ",
+        window_name,
+        CANNY_THRESH2_DEFAULT,
+        CANNY_THRESH_MAX,
+        on_canny_thresh2,
     )
 
 
@@ -76,10 +82,11 @@ def custom_filter(gray, kernel):
     return np.uint8(np.absolute(filtered))
 
 
-CUSTOM_MODES = [None, "custom_sobel_x", "custom_sobel_y"]
+CUSTOM_MODES = [None, "custom_sobel_x", "custom_sobel_y", "custom_laplacian"]
 CUSTOM_KERNELS = {
     "custom_sobel_x": SOBEL_KERNEL_X,
     "custom_sobel_y": SOBEL_KERNEL_Y,
+    "custom_laplacian": LAPLACIAN_KERNEL,
 }
 
 
@@ -123,7 +130,9 @@ def handle_key(key, state):
         if state["canny_enabled"]:
             state["gradient_mode"] = None
             state["gradient_pending"] = False
-            print(f"Canny: enabled (T1={state['canny_thresh1']}, T2={state['canny_thresh2']})")
+            print(
+                f"Canny: enabled (T1={state['canny_thresh1']}, T2={state['canny_thresh2']})"
+            )
         else:
             print("Canny: disabled")
         return True
