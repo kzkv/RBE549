@@ -7,6 +7,14 @@ import numpy as np
 SOBEL_KSIZE_MIN = 1
 SOBEL_KSIZE_MAX = 7
 
+SOBEL_KERNEL_X = np.array([[-1, 0, 1],
+                           [-2, 0, 2],
+                           [-1, 0, 1]], dtype=np.float64)
+
+SOBEL_KERNEL_Y = np.array([[-1, -2, -1],
+                           [ 0,  0,  0],
+                           [ 1,  2,  1]], dtype=np.float64)
+
 CANNY_THRESH_MIN = 1
 CANNY_THRESH_MAX = 5000
 CANNY_THRESH1_DEFAULT = 100
@@ -22,6 +30,7 @@ def init_state():
         "canny_enabled": False,
         "canny_thresh1": CANNY_THRESH1_DEFAULT,
         "canny_thresh2": CANNY_THRESH2_DEFAULT,
+        "custom_mode": None,
     }
 
 
@@ -60,8 +69,26 @@ def setup_trackbars(window_name, state):
     )
 
 
+def custom_filter(gray, kernel):
+    """Apply a convolution kernel via filter2D instead of cv2.Sobel()/cv2.Laplacian()."""
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    filtered = cv2.filter2D(blurred, cv2.CV_64F, kernel)
+    return np.uint8(np.absolute(filtered))
+
+
+CUSTOM_MODES = [None, "custom_sobel_x", "custom_sobel_y"]
+CUSTOM_KERNELS = {
+    "custom_sobel_x": SOBEL_KERNEL_X,
+    "custom_sobel_y": SOBEL_KERNEL_Y,
+}
+
+
 def apply_effects(img, state):
     """Apply Lab 3 gradient/edge effects."""
+    if state["custom_mode"] in CUSTOM_KERNELS:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        result = custom_filter(gray, CUSTOM_KERNELS[state["custom_mode"]])
+        return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
     mode = state["gradient_mode"]
     if mode in ("sobel_x", "sobel_y"):
         ksize = state["sobel_ksize"]
@@ -79,6 +106,18 @@ def apply_effects(img, state):
 
 def handle_key(key, state):
     """Handle Lab 3 key presses. Returns True if key was handled."""
+    if key == ord("4"):
+        idx = CUSTOM_MODES.index(state["custom_mode"])
+        state["custom_mode"] = CUSTOM_MODES[(idx + 1) % len(CUSTOM_MODES)]
+        if state["custom_mode"]:
+            state["gradient_mode"] = None
+            state["gradient_pending"] = False
+            state["canny_enabled"] = False
+            print(f"Custom: {state['custom_mode']}")
+        else:
+            print("Custom: disabled")
+        return True
+
     if key == ord("d"):
         state["canny_enabled"] = not state["canny_enabled"]
         if state["canny_enabled"]:
