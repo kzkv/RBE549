@@ -29,7 +29,7 @@ def init_state():
         "canny_thresh1": CANNY_THRESH1_DEFAULT,
         "canny_thresh2": CANNY_THRESH2_DEFAULT,
         "laplacian_enabled": False,
-        "custom_mode": None,
+        "quad_view": False,
     }
 
 
@@ -83,20 +83,47 @@ def custom_filter(gray, kernel):
     return np.uint8(np.absolute(filtered))
 
 
-CUSTOM_MODES = [None, "custom_sobel_x", "custom_sobel_y", "custom_laplacian"]
-CUSTOM_KERNELS = {
-    "custom_sobel_x": SOBEL_KERNEL_X,
-    "custom_sobel_y": SOBEL_KERNEL_Y,
-    "custom_laplacian": LAPLACIAN_KERNEL,
-}
+QUAD_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
+QUAD_LABEL_SCALE = 0.8
+QUAD_LABEL_THICKNESS = 2
+
+
+def _draw_label(img, text):
+    """Draw a label centered at the top of a quad panel."""
+    (tw, th), _ = cv2.getTextSize(text, QUAD_LABEL_FONT, QUAD_LABEL_SCALE, QUAD_LABEL_THICKNESS)
+    x = (img.shape[1] - tw) // 2
+    y = th + 10
+    cv2.putText(img, text, (x, y), QUAD_LABEL_FONT, QUAD_LABEL_SCALE,
+                (0, 0, 0), QUAD_LABEL_THICKNESS + 2)
+    cv2.putText(img, text, (x, y), QUAD_LABEL_FONT, QUAD_LABEL_SCALE,
+                (255, 255, 255), QUAD_LABEL_THICKNESS)
+
+
+def build_quad_view(img):
+    """Build a 2x2 grid: Original, Laplacian, Sobel X, Sobel Y using custom kernels."""
+    h, w = img.shape[:2]
+    half_h, half_w = h // 2, w // 2
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    panels = [
+        ("Original", cv2.resize(img, (half_w, half_h))),
+        ("Laplacian", cv2.resize(cv2.cvtColor(custom_filter(gray, LAPLACIAN_KERNEL), cv2.COLOR_GRAY2BGR), (half_w, half_h))),
+        ("Sobel X", cv2.resize(cv2.cvtColor(custom_filter(gray, SOBEL_KERNEL_X), cv2.COLOR_GRAY2BGR), (half_w, half_h))),
+        ("Sobel Y", cv2.resize(cv2.cvtColor(custom_filter(gray, SOBEL_KERNEL_Y), cv2.COLOR_GRAY2BGR), (half_w, half_h))),
+    ]
+
+    for label, panel in panels:
+        _draw_label(panel, label)
+
+    top = np.hstack([panels[0][1], panels[1][1]])
+    bottom = np.hstack([panels[2][1], panels[3][1]])
+    return np.vstack([top, bottom])
 
 
 def apply_effects(img, state):
     """Apply Lab 3 gradient/edge effects."""
-    if state["custom_mode"] in CUSTOM_KERNELS:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        result = custom_filter(gray, CUSTOM_KERNELS[state["custom_mode"]])
-        return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
+    if state["quad_view"]:
+        return build_quad_view(img)
     mode = state["gradient_mode"]
     if mode in ("sobel_x", "sobel_y"):
         ksize = state["sobel_ksize"]
@@ -122,15 +149,15 @@ def apply_effects(img, state):
 def handle_key(key, state):
     """Handle Lab 3 key presses. Returns True if key was handled."""
     if key == ord("4"):
-        idx = CUSTOM_MODES.index(state["custom_mode"])
-        state["custom_mode"] = CUSTOM_MODES[(idx + 1) % len(CUSTOM_MODES)]
-        if state["custom_mode"]:
+        state["quad_view"] = not state["quad_view"]
+        if state["quad_view"]:
             state["gradient_mode"] = None
             state["gradient_pending"] = False
             state["canny_enabled"] = False
-            print(f"Custom: {state['custom_mode']}")
+            state["laplacian_enabled"] = False
+            print("Quad view: enabled")
         else:
-            print("Custom: disabled")
+            print("Quad view: disabled")
         return True
 
     if key == ord("l"):
