@@ -28,7 +28,7 @@ def create_state():
 
 def draw_help_text(display):
     """Draw keyboard shortcuts legend at bottom left."""
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp  g+x/y: sobel"
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp  g+x/y: sobel  d: canny"
     (help_w, help_h), help_baseline = cv2.getTextSize(
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
