@@ -52,21 +52,12 @@ def rotate(img, angle_deg):
 
 
 def scale(img, factor):
-    """Scale image by the given factor. Upscale returns full enlarged image; downscale pads with white."""
+    """Scale image by the given factor. Returns the resized image at its natural dimensions."""
     if factor == 1.0:
         return img.copy()
     h, w = img.shape[:2]
     new_w, new_h = int(w * factor), int(h * factor)
-    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-
-    if factor > 1.0:
-        return resized
-
-    canvas = np.full_like(img, 255)
-    x_off = (w - new_w) // 2
-    y_off = (h - new_h) // 2
-    canvas[y_off : y_off + new_h, x_off : x_off + new_w] = resized
-    return canvas
+    return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
 
 def affine(img, skew):
