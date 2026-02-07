@@ -29,6 +29,41 @@ GRID_LABEL_MARGIN = 80
 GRID_LABEL_PAD = 30
 
 
+FEATURE_MODES = [None, "harris", "sift"]
+
+
+def init_state():
+    """Return Lab 4 state keys with defaults."""
+    return {"feature_mode": None}
+
+
+def setup_trackbars(window_name, state):
+    """No trackbars for Lab 4."""
+    pass
+
+
+def handle_key(key, state):
+    """Handle Lab 4 key presses. Returns True if key was handled."""
+    if key == ord("f"):
+        idx = FEATURE_MODES.index(state["feature_mode"])
+        state["feature_mode"] = FEATURE_MODES[(idx + 1) % len(FEATURE_MODES)]
+        mode = state["feature_mode"] or "off"
+        print(f"Features: {mode}")
+        return True
+    return False
+
+
+def apply_effects(img, state):
+    """Apply Lab 4 feature detection effects."""
+    if state["feature_mode"] == "harris":
+        result, _ = detect_harris(img)
+        return result
+    if state["feature_mode"] == "sift":
+        result, _ = detect_sift(img)
+        return result
+    return img
+
+
 def load_image():
     img = cv2.imread(IMAGE_PATH)
     if img is None:
@@ -105,8 +140,13 @@ def detect_sift(img):
     result = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     sift = cv2.SIFT_create()
     keypoints = sift.detect(gray, None)
-    cv2.drawKeypoints(result, keypoints, result, SIFT_COLOR,
-                      cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    cv2.drawKeypoints(
+        result,
+        keypoints,
+        result,
+        SIFT_COLOR,
+        cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
+    )
     return result, len(keypoints)
 
 
