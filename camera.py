@@ -64,6 +64,7 @@ def main():
     lab1.setup_trackbars(WINDOW_NAME, state)
     lab2.setup_trackbars(WINDOW_NAME, state)
     lab3.setup_trackbars(WINDOW_NAME, state)
+    lab4.setup_trackbars(WINDOW_NAME, state)
     lab2.setup_mouse_callback(WINDOW_NAME, state)
 
     logo, logo_h, logo_w = lab2.load_logo()

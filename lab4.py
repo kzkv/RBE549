@@ -16,11 +16,14 @@ PERSPECTIVE_SQUEEZE = 0.15
 HARRIS_BLOCK_SIZE = 2
 HARRIS_KSIZE = 3
 HARRIS_K = 0.04
-HARRIS_THRESHOLD = 0.1
+HARRIS_THRESHOLD = 10
+HARRIS_THRESHOLD_MAX = 15
 HARRIS_COLOR = (0, 0, 255)
 HARRIS_MARKER_SIZE = 8
 
 SIFT_COLOR = (0, 255, 0)
+SIFT_NFEATURES = 0
+SIFT_NFEATURES_MAX = 500
 
 GRID_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
 GRID_LABEL_SCALE = 0.7
@@ -34,12 +37,32 @@ FEATURE_MODES = [None, "harris", "sift"]
 
 def init_state():
     """Return Lab 4 state keys with defaults."""
-    return {"feature_mode": None}
+    return {
+        "feature_mode": None,
+        "harris_threshold": HARRIS_THRESHOLD,
+        "sift_nfeatures": SIFT_NFEATURES,
+    }
 
 
 def setup_trackbars(window_name, state):
-    """No trackbars for Lab 4."""
-    pass
+    """Create Lab 4 trackbars."""
+
+    def on_harris_thresh(v):
+        state["harris_threshold"] = max(1, v)
+
+    def on_sift_nfeatures(v):
+        state["sift_nfeatures"] = v
+
+    cv2.createTrackbar(
+        "Harris T%: ",
+        window_name,
+        HARRIS_THRESHOLD,
+        HARRIS_THRESHOLD_MAX,
+        on_harris_thresh,
+    )
+    cv2.createTrackbar(
+        "SIFT N: ", window_name, SIFT_NFEATURES, SIFT_NFEATURES_MAX, on_sift_nfeatures
+    )
 
 
 def handle_key(key, state):
@@ -56,10 +79,10 @@ def handle_key(key, state):
 def apply_effects(img, state):
     """Apply Lab 4 feature detection effects."""
     if state["feature_mode"] == "harris":
-        result, _ = detect_harris(img)
+        result, _ = detect_harris(img, state["harris_threshold"] / 100.0)
         return result
     if state["feature_mode"] == "sift":
-        result, _ = detect_sift(img)
+        result, _ = detect_sift(img, state["sift_nfeatures"])
         return result
     return img
 
@@ -120,13 +143,13 @@ def perspective(img, squeeze):
     return cv2.warpPerspective(img, matrix, (w, new_h), borderValue=(255, 255, 255))
 
 
-def detect_harris(img):
+def detect_harris(img, threshold=HARRIS_THRESHOLD / 100.0):
     """Detect Harris corners and draw red crosshair markers on a grayscale copy."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     result = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     dst = cv2.cornerHarris(np.float32(gray), HARRIS_BLOCK_SIZE, HARRIS_KSIZE, HARRIS_K)
     dst = cv2.dilate(dst, None)
-    ys, xs = np.where(dst > HARRIS_THRESHOLD * dst.max())
+    ys, xs = np.where(dst > threshold * dst.max())
     for x, y in zip(xs, ys):
         cv2.drawMarker(
             result, (x, y), HARRIS_COLOR, cv2.MARKER_CROSS, HARRIS_MARKER_SIZE, 1
@@ -134,11 +157,11 @@ def detect_harris(img):
     return result, len(xs)
 
 
-def detect_sift(img):
+def detect_sift(img, nfeatures=SIFT_NFEATURES):
     """Detect SIFT keypoints and draw them in green on a grayscale copy."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     result = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    sift = cv2.SIFT_create()
+    sift = cv2.SIFT_create(nfeatures=nfeatures)
     keypoints = sift.detect(gray, None)
     cv2.drawKeypoints(
         result,
