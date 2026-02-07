@@ -20,6 +20,8 @@ HARRIS_THRESHOLD = 0.1
 HARRIS_COLOR = (0, 0, 255)
 HARRIS_MARKER_SIZE = 8
 
+SIFT_COLOR = (0, 255, 0)
+
 GRID_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
 GRID_LABEL_SCALE = 0.7
 GRID_LABEL_THICKNESS = 2
@@ -97,6 +99,17 @@ def detect_harris(img):
     return result, len(xs)
 
 
+def detect_sift(img):
+    """Detect SIFT keypoints and draw them in green on a grayscale copy."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    result = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    sift = cv2.SIFT_create()
+    keypoints = sift.detect(gray, None)
+    cv2.drawKeypoints(result, keypoints, result, SIFT_COLOR,
+                      cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    return result, len(keypoints)
+
+
 def fit_to_cell(img, cell_w, cell_h):
     """Resize image to fit within cell dimensions, centering on a white background."""
     h, w = img.shape[:2]
@@ -168,13 +181,25 @@ if __name__ == "__main__":
         result, count = detect_harris(img)
         harris_panels.append((f"{label} ({count})", result))
 
-    show_harris = False
+    sift_panels = []
+    for label, img in panels:
+        result, count = detect_sift(img)
+        sift_panels.append((f"{label} ({count})", result))
+
+    mode = "original"
     while True:
-        grid = build_grid(harris_panels if show_harris else panels, cols=3)
+        if mode == "harris":
+            grid = build_grid(harris_panels, cols=3)
+        elif mode == "sift":
+            grid = build_grid(sift_panels, cols=3)
+        else:
+            grid = build_grid(panels, cols=3)
         cv2.imshow("Lab 4: Geometric Transformations", grid)
         key = cv2.waitKey(1)
         if key == 27:
             break
         if key == ord("h"):
-            show_harris = not show_harris
+            mode = "original" if mode == "harris" else "harris"
+        elif key == ord("s"):
+            mode = "original" if mode == "sift" else "sift"
     cv2.destroyAllWindows()
