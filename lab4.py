@@ -10,6 +10,8 @@ ROTATION_ANGLE = 10
 SCALE_UP_FACTOR = 1.2
 SCALE_DOWN_FACTOR = 0.8
 
+AFFINE_SKEW = 0.15
+
 GRID_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
 GRID_LABEL_SCALE = 0.7
 GRID_LABEL_THICKNESS = 2
@@ -57,6 +59,16 @@ def scale(img, factor):
     y_off = (h - new_h) // 2
     canvas[y_off : y_off + new_h, x_off : x_off + new_w] = resized
     return canvas
+
+
+def affine(img, skew):
+    """Apply a vertical shear (right side shifts up) by the given fraction of image height."""
+    h, w = img.shape[:2]
+    offset = int(h * skew)
+    src_pts = np.float32([[0, 0], [w - 1, 0], [0, h - 1]])
+    dst_pts = np.float32([[0, offset], [w - 1, 0], [0, h - 1 + offset]])
+    matrix = cv2.getAffineTransform(src_pts, dst_pts)
+    return cv2.warpAffine(img, matrix, (w, h + offset), borderValue=(255, 255, 255))
 
 
 def fit_to_cell(img, cell_w, cell_h):
@@ -119,7 +131,7 @@ if __name__ == "__main__":
     panels = [
         ("Original", original),
         ("Scaled Up", scaled_up),
-        ("Affine", original),
+        ("Affine", affine(original, AFFINE_SKEW)),
         ("Rotated", rotated),
         ("Scaled Down", scaled_down),
         ("Perspective", original),
