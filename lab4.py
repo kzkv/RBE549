@@ -11,6 +11,7 @@ SCALE_UP_FACTOR = 1.2
 SCALE_DOWN_FACTOR = 0.8
 
 AFFINE_SKEW = 0.15
+PERSPECTIVE_SQUEEZE = 0.15
 
 GRID_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
 GRID_LABEL_SCALE = 0.7
@@ -69,6 +70,19 @@ def affine(img, skew):
     dst_pts = np.float32([[0, offset], [w - 1, 0], [0, h - 1 + offset]])
     matrix = cv2.getAffineTransform(src_pts, dst_pts)
     return cv2.warpAffine(img, matrix, (w, h + offset), borderValue=(255, 255, 255))
+
+
+def perspective(img, squeeze):
+    """Apply a perspective warp that squeezes the right side inward, left edge stays full height."""
+    h, w = img.shape[:2]
+    offset = int(h * squeeze)
+    src_pts = np.float32([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]])
+    dst_pts = np.float32(
+        [[0, 0], [w - 1, 0], [0, h - 1], [w - 1 - offset, h - 1 + 2 * offset]]
+    )
+    new_h = int(dst_pts[:, 1].max()) + 1
+    matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
+    return cv2.warpPerspective(img, matrix, (w, new_h), borderValue=(255, 255, 255))
 
 
 def fit_to_cell(img, cell_w, cell_h):
@@ -134,7 +148,7 @@ if __name__ == "__main__":
         ("Affine", affine(original, AFFINE_SKEW)),
         ("Rotated", rotated),
         ("Scaled Down", scaled_down),
-        ("Perspective", original),
+        ("Perspective", perspective(original, PERSPECTIVE_SQUEEZE)),
     ]
 
     grid = build_grid(panels, cols=3)
