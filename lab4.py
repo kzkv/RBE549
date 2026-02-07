@@ -13,6 +13,13 @@ SCALE_DOWN_FACTOR = 0.8
 AFFINE_SKEW = 0.15
 PERSPECTIVE_SQUEEZE = 0.15
 
+HARRIS_BLOCK_SIZE = 2
+HARRIS_KSIZE = 3
+HARRIS_K = 0.04
+HARRIS_THRESHOLD = 0.1
+HARRIS_COLOR = (0, 0, 255)
+HARRIS_MARKER_SIZE = 8
+
 GRID_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
 GRID_LABEL_SCALE = 0.7
 GRID_LABEL_THICKNESS = 2
@@ -85,6 +92,20 @@ def perspective(img, squeeze):
     return cv2.warpPerspective(img, matrix, (w, new_h), borderValue=(255, 255, 255))
 
 
+def detect_harris(img):
+    """Detect Harris corners and draw red crosshair markers on a grayscale copy."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    result = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    dst = cv2.cornerHarris(np.float32(gray), HARRIS_BLOCK_SIZE, HARRIS_KSIZE, HARRIS_K)
+    dst = cv2.dilate(dst, None)
+    ys, xs = np.where(dst > HARRIS_THRESHOLD * dst.max())
+    for x, y in zip(xs, ys):
+        cv2.drawMarker(
+            result, (x, y), HARRIS_COLOR, cv2.MARKER_CROSS, HARRIS_MARKER_SIZE, 1
+        )
+    return result, len(xs)
+
+
 def fit_to_cell(img, cell_w, cell_h):
     """Resize image to fit within cell dimensions, centering on a white background."""
     h, w = img.shape[:2]
@@ -151,7 +172,18 @@ if __name__ == "__main__":
         ("Perspective", perspective(original, PERSPECTIVE_SQUEEZE)),
     ]
 
-    grid = build_grid(panels, cols=3)
-    cv2.imshow("Lab 4: Geometric Transformations", grid)
-    cv2.waitKey(0)
+    harris_panels = []
+    for label, img in panels:
+        result, count = detect_harris(img)
+        harris_panels.append((f"{label} ({count})", result))
+
+    show_harris = False
+    while True:
+        grid = build_grid(harris_panels if show_harris else panels, cols=3)
+        cv2.imshow("Lab 4: Geometric Transformations", grid)
+        key = cv2.waitKey(1)
+        if key == 27:
+            break
+        if key == ord("h"):
+            show_harris = not show_harris
     cv2.destroyAllWindows()
