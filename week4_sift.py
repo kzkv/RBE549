@@ -52,20 +52,24 @@ def build_gaussian_octave(base):
     return gaussians
 
 
+def build_dog_octave(gaussians):
+    # DoG, difference of adjacent Gaussian images; approximates Laplacian of Gaussian
+    return [gaussians[j + 1] - gaussians[j] for j in range(len(gaussians) - 1)]
+
+
 def main():
     original = load_image(IMAGE_PATH)
 
     base = build_base_image(original)
     gaussians = build_gaussian_octave(base)
+    dogs = build_dog_octave(gaussians)
 
-    sigmas = [SIGMA_0 * K**j for j in range(S + 3)]
-
-    fig, axes = plt.subplots(1, len(gaussians), figsize=(18, 4))
-    for j, (g, sigma) in enumerate(zip(gaussians, sigmas)):
-        axes[j].imshow(g, cmap="gray")
-        axes[j].set_title(f"σ={sigma:.2f}")
+    fig, axes = plt.subplots(1, len(dogs), figsize=(18, 4))
+    for j, d in enumerate(dogs):
+        axes[j].imshow(d, cmap="gray")
+        axes[j].set_title(f"DoG {j}")
         axes[j].axis("off")
-    fig.suptitle("Octave 0 — Gaussian Stack")
+    fig.suptitle("Octave 0 — Difference of Gaussians")
     plt.tight_layout()
     plt.show()
 
