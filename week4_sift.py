@@ -40,19 +40,32 @@ def build_base_image(img):
     return base
 
 
+def build_gaussian_octave(base):
+    # Produce S+3 progressively blurred images from a single octave base
+    gaussians = [base]
+    for j in range(1, S + 3):
+        sigma_prev = SIGMA_0 * K ** (j - 1)
+        sigma_curr = SIGMA_0 * K**j
+        sigma_inc = math.sqrt(sigma_curr**2 - sigma_prev**2)
+        blurred = cv2.GaussianBlur(gaussians[-1], (0, 0), sigmaX=sigma_inc)
+        gaussians.append(blurred)
+    return gaussians
+
+
 def main():
     original = load_image(IMAGE_PATH)
-    print(f"Loaded {IMAGE_PATH}: shape={original.shape}")
 
     base = build_base_image(original)
+    gaussians = build_gaussian_octave(base)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    axes[0].imshow(original, cmap="gray")
-    axes[0].set_title(f"Original ({original.shape[1]}x{original.shape[0]})")
-    axes[0].axis("off")
-    axes[1].imshow(base, cmap="gray")
-    axes[1].set_title(f"Base ({base.shape[1]}x{base.shape[0]})")
-    axes[1].axis("off")
+    sigmas = [SIGMA_0 * K**j for j in range(S + 3)]
+
+    fig, axes = plt.subplots(1, len(gaussians), figsize=(18, 4))
+    for j, (g, sigma) in enumerate(zip(gaussians, sigmas)):
+        axes[j].imshow(g, cmap="gray")
+        axes[j].set_title(f"σ={sigma:.2f}")
+        axes[j].axis("off")
+    fig.suptitle("Octave 0 — Gaussian Stack")
     plt.tight_layout()
     plt.show()
 
