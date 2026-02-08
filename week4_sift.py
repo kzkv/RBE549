@@ -34,17 +34,17 @@ def build_base_image(img):
     # Double the image and pre-blur
     doubled = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
     sigma_diff = math.sqrt(SIGMA_0**2 - (2 * ASSUMED_BLUR) ** 2)
-    ksize = int(2 * math.ceil(3 * sigma_diff) + 1)
-    base = cv2.GaussianBlur(doubled, (ksize, ksize), sigmaX=sigma_diff)
+    base = cv2.GaussianBlur(
+        doubled, (0, 0), sigmaX=sigma_diff
+    )  # kernel size derived from sigma
     return base
 
 
 def main():
     original = load_image(IMAGE_PATH)
-    print(f"Loaded {IMAGE_PATH}: shape={original.shape}, dtype={original.dtype}")
+    print(f"Loaded {IMAGE_PATH}: shape={original.shape}")
 
     base = build_base_image(original)
-    print(f"Base image: shape={base.shape} (2x upsample + pre-blur to sigma={SIGMA_0})")
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     axes[0].imshow(original, cmap="gray")
