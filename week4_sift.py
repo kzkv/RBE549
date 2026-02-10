@@ -57,19 +57,40 @@ def build_dog_octave(gaussians):
     return [gaussians[j + 1] - gaussians[j] for j in range(len(gaussians) - 1)]
 
 
+def build_gaussian_pyramid(base, num_octaves):
+    pyramid = []
+    for o in range(num_octaves):
+        gaussians = build_gaussian_octave(base)
+        pyramid.append(gaussians)
+        # Downsample the image at 2*sigma_0 to become the next octave's base
+        base = cv2.resize(gaussians[S], None, fx=0.5, fy=0.5,
+                          interpolation=cv2.INTER_NEAREST)
+    return pyramid
+
+
+def build_dog_pyramid(gaussian_pyramid):
+    return [build_dog_octave(g) for g in gaussian_pyramid]
+
+
 def main():
     original = load_image(IMAGE_PATH)
 
     base = build_base_image(original)
-    gaussians = build_gaussian_octave(base)
-    dogs = build_dog_octave(gaussians)
+    gauss_pyr = build_gaussian_pyramid(base, NUM_OCTAVES)
+    dog_pyr = build_dog_pyramid(gauss_pyr)
 
-    fig, axes = plt.subplots(1, len(dogs), figsize=(18, 4))
-    for j, d in enumerate(dogs):
-        axes[j].imshow(d, cmap="gray")
-        axes[j].set_title(f"DoG {j}")
-        axes[j].axis("off")
-    fig.suptitle("Octave 0 — Difference of Gaussians")
+    for o in range(NUM_OCTAVES):
+        h, w = dog_pyr[o][0].shape
+        print(f"Octave {o}: {len(gauss_pyr[o])} Gaussians, "
+              f"{len(dog_pyr[o])} DoGs, size {w}x{h}")
+
+    fig, axes = plt.subplots(NUM_OCTAVES, S + 2, figsize=(18, 12))
+    for o in range(NUM_OCTAVES):
+        for j, d in enumerate(dog_pyr[o]):
+            axes[o][j].imshow(d, cmap="gray")
+            axes[o][j].set_title(f"O{o} D{j}", fontsize=8)
+            axes[o][j].axis("off")
+    fig.suptitle("DoG Pyramid")
     plt.tight_layout()
     plt.show()
 
