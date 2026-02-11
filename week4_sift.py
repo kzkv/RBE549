@@ -72,6 +72,34 @@ def build_dog_pyramid(gaussian_pyramid):
     return [build_dog_octave(g) for g in gaussian_pyramid]
 
 
+def find_extrema(dog_pyr):
+    # Compare each pixel to its 26 neighbors in the 3x3x3 scale-space cube
+    keypoints = []
+    for o, dogs in enumerate(dog_pyr):
+        for j in range(1, len(dogs) - 1):
+            below, current, above = dogs[j - 1], dogs[j], dogs[j + 1]
+            h, w = current.shape
+            center = current[1:-1, 1:-1]
+
+            is_max = np.ones(center.shape, dtype=bool)
+            is_min = np.ones(center.shape, dtype=bool)
+
+            for layer in (below, current, above):
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if layer is current and dr == 0 and dc == 0:
+                            continue
+                        neighbor = layer[1 + dr:h - 1 + dr, 1 + dc:w - 1 + dc]
+                        is_max &= center > neighbor
+                        is_min &= center < neighbor
+
+            rows, cols = np.where(is_max | is_min)
+            for r, c in zip(rows, cols):
+                keypoints.append((o, j, r + 1, c + 1))
+
+    return keypoints
+
+
 def main():
     original = load_image(IMAGE_PATH)
 
@@ -79,18 +107,21 @@ def main():
     gauss_pyr = build_gaussian_pyramid(base, NUM_OCTAVES)
     dog_pyr = build_dog_pyramid(gauss_pyr)
 
-    for o in range(NUM_OCTAVES):
-        h, w = dog_pyr[o][0].shape
-        print(f"Octave {o}: {len(gauss_pyr[o])} Gaussians, "
-              f"{len(dog_pyr[o])} DoGs, size {w}x{h}")
+    keypoints = find_extrema(dog_pyr)
 
-    fig, axes = plt.subplots(NUM_OCTAVES, S + 2, figsize=(18, 12))
-    for o in range(NUM_OCTAVES):
-        for j, d in enumerate(dog_pyr[o]):
-            axes[o][j].imshow(d, cmap="gray")
-            axes[o][j].set_title(f"O{o} D{j}", fontsize=8)
-            axes[o][j].axis("off")
-    fig.suptitle("DoG Pyramid")
+    per_octave = [sum(1 for kp in keypoints if kp[0] == o) for o in range(NUM_OCTAVES)]
+    print(f"Raw extrema: {len(keypoints)} total, per octave: {per_octave}")
+
+    # Map keypoint coordinates to original image space
+    scale = lambda o: 2 ** (o - 1)
+    kp_x = [kp[3] * scale(kp[0]) for kp in keypoints]
+    kp_y = [kp[2] * scale(kp[0]) for kp in keypoints]
+
+    plt.figure(figsize=(8, 8))
+    plt.imshow(original, cmap="gray")
+    plt.plot(kp_x, kp_y, "r+", markersize=3)
+    plt.title(f"Raw Extrema (N={len(keypoints)})")
+    plt.axis("off")
     plt.tight_layout()
     plt.show()
 
