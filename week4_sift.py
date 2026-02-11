@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 IMAGE_PATH = "Fabio.png"
+COMPARE_OPENCV = True
 
 # Constants extracted from the paper
 SIGMA_0 = 1.6
@@ -117,13 +118,38 @@ def main():
     kp_x = [kp[3] * scale(kp[0]) for kp in keypoints]
     kp_y = [kp[2] * scale(kp[0]) for kp in keypoints]
 
-    plt.figure(figsize=(8, 8))
-    plt.imshow(original, cmap="gray")
-    plt.plot(kp_x, kp_y, "r+", markersize=3)
-    plt.title(f"Raw Extrema (N={len(keypoints)})")
-    plt.axis("off")
-    plt.tight_layout()
-    plt.show()
+    if COMPARE_OPENCV:
+        gray_u8 = (original * 255).astype(np.uint8)
+        sift_all = cv2.SIFT_create(contrastThreshold=0.0, edgeThreshold=1000)
+        sift_default = cv2.SIFT_create()
+        kps_all = sift_all.detect(gray_u8)
+        kps_default = sift_default.detect(gray_u8)
+        print(f"OpenCV SIFT (filters off): {len(kps_all)}")
+        print(f"OpenCV SIFT (defaults):    {len(kps_default)}")
+
+        cv_x = [kp.pt[0] for kp in kps_all]
+        cv_y = [kp.pt[1] for kp in kps_all]
+
+        fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+        axes[0].imshow(original, cmap="gray")
+        axes[0].plot(kp_x, kp_y, "r+", markersize=3)
+        axes[0].set_title(f"Ours (N={len(keypoints)})")
+        axes[0].axis("off")
+        axes[1].imshow(original, cmap="gray")
+        axes[1].plot(cv_x, cv_y, "b+", markersize=3)
+        axes[1].set_title(f"OpenCV filters off (N={len(kps_all)})")
+        axes[1].axis("off")
+        fig.suptitle("Raw Extrema Comparison")
+        plt.tight_layout()
+        plt.show()
+    else:
+        plt.figure(figsize=(8, 8))
+        plt.imshow(original, cmap="gray")
+        plt.plot(kp_x, kp_y, "r+", markersize=3)
+        plt.title(f"Raw Extrema (N={len(keypoints)})")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.show()
 
 
 if __name__ == "__main__":
