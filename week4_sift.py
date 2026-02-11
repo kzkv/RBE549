@@ -64,8 +64,9 @@ def build_gaussian_pyramid(base, num_octaves):
         gaussians = build_gaussian_octave(base)
         pyramid.append(gaussians)
         # Downsample the image at 2*sigma_0 to become the next octave's base
-        base = cv2.resize(gaussians[S], None, fx=0.5, fy=0.5,
-                          interpolation=cv2.INTER_NEAREST)
+        base = cv2.resize(
+            gaussians[S], None, fx=0.5, fy=0.5, interpolation=cv2.INTER_NEAREST
+        )
     return pyramid
 
 
@@ -90,7 +91,7 @@ def find_extrema(dog_pyr):
                     for dc in (-1, 0, 1):
                         if layer is current and dr == 0 and dc == 0:
                             continue
-                        neighbor = layer[1 + dr:h - 1 + dr, 1 + dc:w - 1 + dc]
+                        neighbor = layer[1 + dr : h - 1 + dr, 1 + dc : w - 1 + dc]
                         is_max &= center > neighbor
                         is_min &= center < neighbor
 
@@ -101,6 +102,79 @@ def find_extrema(dog_pyr):
     return keypoints
 
 
+def localize_keypoint(dogs, s, r, c):
+    """Refine a single keypoint via Taylor expansion. Returns (s, r, c, contrast) or None."""
+    h, w = dogs[0].shape
+    for _ in range(MAX_INTERP_STEPS):
+        d = dogs[s]
+        # 3D gradient
+        gradient = np.array(
+            [
+                (dogs[s][r, c + 1] - dogs[s][r, c - 1]) / 2,
+                (dogs[s][r + 1, c] - dogs[s][r - 1, c]) / 2,
+                (dogs[s + 1][r, c] - dogs[s - 1][r, c]) / 2,
+            ]
+        )
+        # 3x3 Hessian
+        dxx = d[r, c + 1] - 2 * d[r, c] + d[r, c - 1]
+        dyy = d[r + 1, c] - 2 * d[r, c] + d[r - 1, c]
+        dss = dogs[s + 1][r, c] - 2 * d[r, c] + dogs[s - 1][r, c]
+        dxy = (
+            d[r + 1, c + 1] - d[r + 1, c - 1] - d[r - 1, c + 1] + d[r - 1, c - 1]
+        ) / 4
+        dxs = (
+            dogs[s + 1][r, c + 1]
+            - dogs[s + 1][r, c - 1]
+            - dogs[s - 1][r, c + 1]
+            + dogs[s - 1][r, c - 1]
+        ) / 4
+        dys = (
+            dogs[s + 1][r + 1, c]
+            - dogs[s + 1][r - 1, c]
+            - dogs[s - 1][r + 1, c]
+            + dogs[s - 1][r - 1, c]
+        ) / 4
+        hessian = np.array(
+            [
+                [dxx, dxy, dxs],
+                [dxy, dyy, dys],
+                [dxs, dys, dss],
+            ]
+        )
+
+        offset, _, _, _ = np.linalg.lstsq(hessian, -gradient, rcond=None)
+
+        if np.all(np.abs(offset) <= 0.5):
+            break
+
+        # Re-center to nearest sample
+        c += int(round(offset[0]))
+        r += int(round(offset[1]))
+        s += int(round(offset[2]))
+
+        if s < 1 or s > len(dogs) - 2 or r < 1 or r >= h - 1 or c < 1 or c >= w - 1:
+            return None
+    else:
+        return None
+
+    # OpenCV convention: multiply contrast by S before comparing to threshold
+    contrast = dogs[s][r, c] + 0.5 * gradient.dot(offset)
+    if abs(contrast) * S < CONTRAST_THRESHOLD:
+        return None
+
+    return s, r, c, contrast
+
+
+def filter_low_contrast(dog_pyr, keypoints):
+    surviving = []
+    for o, s, r, c in keypoints:
+        result = localize_keypoint(dog_pyr[o], s, r, c)
+        if result is not None:
+            s_ref, r_ref, c_ref, contrast = result
+            surviving.append((o, s_ref, r_ref, c_ref))
+    return surviving
+
+
 def main():
     original = load_image(IMAGE_PATH)
 
@@ -108,15 +182,30 @@ def main():
     gauss_pyr = build_gaussian_pyramid(base, NUM_OCTAVES)
     dog_pyr = build_dog_pyramid(gauss_pyr)
 
-    keypoints = find_extrema(dog_pyr)
+    raw_keypoints = find_extrema(dog_pyr)
+    print(f"Raw extrema: {len(raw_keypoints)}")
 
-    per_octave = [sum(1 for kp in keypoints if kp[0] == o) for o in range(NUM_OCTAVES)]
-    print(f"Raw extrema: {len(keypoints)} total, per octave: {per_octave}")
+    contrast_keypoints = filter_low_contrast(dog_pyr, raw_keypoints)
+    print(f"After contrast filter: {len(contrast_keypoints)}")
 
     # Map keypoint coordinates to original image space
     scale = lambda o: 2 ** (o - 1)
-    kp_x = [kp[3] * scale(kp[0]) for kp in keypoints]
-    kp_y = [kp[2] * scale(kp[0]) for kp in keypoints]
+    raw_x = [kp[3] * scale(kp[0]) for kp in raw_keypoints]
+    raw_y = [kp[2] * scale(kp[0]) for kp in raw_keypoints]
+    con_x = [kp[3] * scale(kp[0]) for kp in contrast_keypoints]
+    con_y = [kp[2] * scale(kp[0]) for kp in contrast_keypoints]
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    axes[0].imshow(original, cmap="gray")
+    axes[0].plot(raw_x, raw_y, "r+", markersize=3)
+    axes[0].set_title(f"Raw Extrema (N={len(raw_keypoints)})")
+    axes[0].axis("off")
+    axes[1].imshow(original, cmap="gray")
+    axes[1].plot(con_x, con_y, "g+", markersize=3)
+    axes[1].set_title(f"After Contrast Filter (N={len(contrast_keypoints)})")
+    axes[1].axis("off")
+    plt.tight_layout()
+    plt.show()
 
     if COMPARE_OPENCV:
         gray_u8 = (original * 255).astype(np.uint8)
@@ -127,27 +216,19 @@ def main():
         print(f"OpenCV SIFT (filters off): {len(kps_all)}")
         print(f"OpenCV SIFT (defaults):    {len(kps_default)}")
 
-        cv_x = [kp.pt[0] for kp in kps_all]
-        cv_y = [kp.pt[1] for kp in kps_all]
+        cv_x = [kp.pt[0] for kp in kps_default]
+        cv_y = [kp.pt[1] for kp in kps_default]
 
         fig, axes = plt.subplots(1, 2, figsize=(16, 8))
         axes[0].imshow(original, cmap="gray")
-        axes[0].plot(kp_x, kp_y, "r+", markersize=3)
-        axes[0].set_title(f"Ours (N={len(keypoints)})")
+        axes[0].plot(con_x, con_y, "g+", markersize=3)
+        axes[0].set_title(f"Ours after contrast (N={len(contrast_keypoints)})")
         axes[0].axis("off")
         axes[1].imshow(original, cmap="gray")
         axes[1].plot(cv_x, cv_y, "b+", markersize=3)
-        axes[1].set_title(f"OpenCV filters off (N={len(kps_all)})")
+        axes[1].set_title(f"OpenCV defaults (N={len(kps_default)})")
         axes[1].axis("off")
-        fig.suptitle("Raw Extrema Comparison")
-        plt.tight_layout()
-        plt.show()
-    else:
-        plt.figure(figsize=(8, 8))
-        plt.imshow(original, cmap="gray")
-        plt.plot(kp_x, kp_y, "r+", markersize=3)
-        plt.title(f"Raw Extrema (N={len(keypoints)})")
-        plt.axis("off")
+        fig.suptitle("OpenCV Comparison")
         plt.tight_layout()
         plt.show()
 
