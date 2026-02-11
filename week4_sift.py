@@ -102,45 +102,52 @@ def find_extrema(dog_pyr):
     return keypoints
 
 
+def gradient_and_hessian(dogs, s, r, c):
+    # Compute the 3D gradient (3,) and Hessian (3,3) at a DoG sample via finite differences.
+
+    d = dogs[s]
+    gradient = np.array(
+        [
+            (d[r, c + 1] - d[r, c - 1]) / 2,
+            (d[r + 1, c] - d[r - 1, c]) / 2,
+            (dogs[s + 1][r, c] - dogs[s - 1][r, c]) / 2,
+        ]
+    )
+
+    # Pure second derivatives: f''(x) ≈ f(x+1) - 2f(x) + f(x-1)
+    dxx = d[r, c + 1] - 2 * d[r, c] + d[r, c - 1]
+    dyy = d[r + 1, c] - 2 * d[r, c] + d[r - 1, c]
+    dss = dogs[s + 1][r, c] - 2 * d[r, c] + dogs[s - 1][r, c]
+
+    # Cross derivatives: four-corner stencil, (f(+,+) - f(+,-) - f(-,+) + f(-,-)) / 4
+    dxy = (d[r + 1, c + 1] - d[r + 1, c - 1] - d[r - 1, c + 1] + d[r - 1, c - 1]) / 4
+    dxs = (
+        dogs[s + 1][r, c + 1]
+        - dogs[s + 1][r, c - 1]
+        - dogs[s - 1][r, c + 1]
+        + dogs[s - 1][r, c - 1]
+    ) / 4
+    dys = (
+        dogs[s + 1][r + 1, c]
+        - dogs[s + 1][r - 1, c]
+        - dogs[s - 1][r + 1, c]
+        + dogs[s - 1][r - 1, c]
+    ) / 4
+    hessian = np.array(
+        [
+            [dxx, dxy, dxs],
+            [dxy, dyy, dys],
+            [dxs, dys, dss],
+        ]
+    )
+    return gradient, hessian
+
+
 def localize_keypoint(dogs, s, r, c):
-    """Refine a single keypoint via Taylor expansion. Returns (s, r, c, contrast) or None."""
+    # Refine a single keypoint via Taylor expansion. Returns (s, r, c, contrast) or None.
     h, w = dogs[0].shape
     for _ in range(MAX_INTERP_STEPS):
-        d = dogs[s]
-        # 3D gradient
-        gradient = np.array(
-            [
-                (dogs[s][r, c + 1] - dogs[s][r, c - 1]) / 2,
-                (dogs[s][r + 1, c] - dogs[s][r - 1, c]) / 2,
-                (dogs[s + 1][r, c] - dogs[s - 1][r, c]) / 2,
-            ]
-        )
-        # 3x3 Hessian
-        dxx = d[r, c + 1] - 2 * d[r, c] + d[r, c - 1]
-        dyy = d[r + 1, c] - 2 * d[r, c] + d[r - 1, c]
-        dss = dogs[s + 1][r, c] - 2 * d[r, c] + dogs[s - 1][r, c]
-        dxy = (
-            d[r + 1, c + 1] - d[r + 1, c - 1] - d[r - 1, c + 1] + d[r - 1, c - 1]
-        ) / 4
-        dxs = (
-            dogs[s + 1][r, c + 1]
-            - dogs[s + 1][r, c - 1]
-            - dogs[s - 1][r, c + 1]
-            + dogs[s - 1][r, c - 1]
-        ) / 4
-        dys = (
-            dogs[s + 1][r + 1, c]
-            - dogs[s + 1][r - 1, c]
-            - dogs[s - 1][r + 1, c]
-            + dogs[s - 1][r - 1, c]
-        ) / 4
-        hessian = np.array(
-            [
-                [dxx, dxy, dxs],
-                [dxy, dyy, dys],
-                [dxs, dys, dss],
-            ]
-        )
+        gradient, hessian = gradient_and_hessian(dogs, s, r, c)
 
         offset, _, _, _ = np.linalg.lstsq(hessian, -gradient, rcond=None)
 
