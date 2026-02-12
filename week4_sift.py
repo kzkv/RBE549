@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 IMAGE_PATH = "Fabio.png"
+# IMAGE_PATH = "Lowes_house.jpg"
 COMPARE_OPENCV = False
 
 # Constants extracted from the paper
