@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 IMAGE_PATH = "Fabio.png"
-COMPARE_OPENCV = True
+COMPARE_OPENCV = False
 
 # Constants extracted from the paper
 SIGMA_0 = 1.6
@@ -182,6 +182,27 @@ def filter_low_contrast(dog_pyr, keypoints):
     return surviving
 
 
+def filter_edge_responses(dog_pyr, keypoints):
+    # Reject keypoints on edges using the principal curvature ratio test
+    threshold = (EDGE_RATIO + 1) ** 2 / EDGE_RATIO
+    surviving = []
+    for o, s, r, c in keypoints:
+        d = dog_pyr[o][s]
+        dxx = d[r, c + 1] - 2 * d[r, c] + d[r, c - 1]
+        dyy = d[r + 1, c] - 2 * d[r, c] + d[r - 1, c]
+        dxy = (
+            d[r + 1, c + 1] - d[r + 1, c - 1] - d[r - 1, c + 1] + d[r - 1, c - 1]
+        ) / 4
+        det = dxx * dyy - dxy * dxy
+        if det <= 0:
+            continue
+        trace = dxx + dyy
+        if trace * trace / det > threshold:
+            continue
+        surviving.append((o, s, r, c))
+    return surviving
+
+
 def main():
     original = load_image(IMAGE_PATH)
 
@@ -195,14 +216,19 @@ def main():
     contrast_keypoints = filter_low_contrast(dog_pyr, raw_keypoints)
     print(f"After contrast filter: {len(contrast_keypoints)}")
 
+    edge_keypoints = filter_edge_responses(dog_pyr, contrast_keypoints)
+    print(f"After edge filter: {len(edge_keypoints)}")
+
     # Map keypoint coordinates to original image space
     scale = lambda o: 2 ** (o - 1)
     raw_x = [kp[3] * scale(kp[0]) for kp in raw_keypoints]
     raw_y = [kp[2] * scale(kp[0]) for kp in raw_keypoints]
     con_x = [kp[3] * scale(kp[0]) for kp in contrast_keypoints]
     con_y = [kp[2] * scale(kp[0]) for kp in contrast_keypoints]
+    edge_x = [kp[3] * scale(kp[0]) for kp in edge_keypoints]
+    edge_y = [kp[2] * scale(kp[0]) for kp in edge_keypoints]
 
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    fig, axes = plt.subplots(1, 3, figsize=(20, 7))
     axes[0].imshow(original, cmap="gray")
     axes[0].plot(raw_x, raw_y, "r+", markersize=3)
     axes[0].set_title(f"Raw Extrema (N={len(raw_keypoints)})")
@@ -211,6 +237,10 @@ def main():
     axes[1].plot(con_x, con_y, "g+", markersize=3)
     axes[1].set_title(f"After Contrast Filter (N={len(contrast_keypoints)})")
     axes[1].axis("off")
+    axes[2].imshow(original, cmap="gray")
+    axes[2].plot(edge_x, edge_y, "b+", markersize=3)
+    axes[2].set_title(f"After Edge Filter (N={len(edge_keypoints)})")
+    axes[2].axis("off")
     plt.tight_layout()
     plt.show()
 
@@ -228,8 +258,8 @@ def main():
 
         fig, axes = plt.subplots(1, 2, figsize=(16, 8))
         axes[0].imshow(original, cmap="gray")
-        axes[0].plot(con_x, con_y, "g+", markersize=3)
-        axes[0].set_title(f"Ours after contrast (N={len(contrast_keypoints)})")
+        axes[0].plot(edge_x, edge_y, "r+", markersize=3)
+        axes[0].set_title(f"Week 4 final (N={len(edge_keypoints)})")
         axes[0].axis("off")
         axes[1].imshow(original, cmap="gray")
         axes[1].plot(cv_x, cv_y, "b+", markersize=3)

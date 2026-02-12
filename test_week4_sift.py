@@ -1,11 +1,17 @@
 # Tom Kazakov
 # Unit tests for SIFT keypoint localization math
-# Auto-generated with Claude Opus 4.6
 
 import numpy as np
 import pytest
 
-from week4_sift import gradient_and_hessian, localize_keypoint, S, CONTRAST_THRESHOLD
+from week4_sift import (
+    gradient_and_hessian,
+    localize_keypoint,
+    filter_edge_responses,
+    S,
+    CONTRAST_THRESHOLD,
+    EDGE_RATIO,
+)
 
 
 def _make_quadratic_dogs(center_val, grad, hessian_mat, shape=(7, 7), num_scales=5):
@@ -58,9 +64,7 @@ class TestLocalizeKeypoint:
         """Extremum at (2, 3.3, 3.2) — should converge to grid point (2,3,3) with sub-pixel offset."""
         true_offset = np.array([0.2, 0.3, 0.0])
         H = np.diag([-2.0, -2.0, -2.0])
-        grad = (
-            -H @ true_offset
-        )  # gradient at grid point that places extremum at true_offset
+        grad = -H @ true_offset
         center_val = 0.8
         dogs = _make_quadratic_dogs(center_val, grad, H)
         result = localize_keypoint(dogs, s=2, r=3, c=3)
@@ -79,11 +83,50 @@ class TestLocalizeKeypoint:
 
     def test_rejects_unconverged(self):
         """Strong gradient that keeps pushing the offset past 0.5 each step."""
-        H = np.diag([-0.01, -0.01, -0.01])  # very weak curvature
-        grad = np.array([5.0, 5.0, 5.0])  # strong gradient pulls far from center
+        H = np.diag([-0.01, -0.01, -0.01])
+        grad = np.array([5.0, 5.0, 5.0])
         dogs = _make_quadratic_dogs(0.5, grad, H, shape=(50, 50), num_scales=20)
         result = localize_keypoint(dogs, s=10, r=25, c=25)
         assert result is None
+
+
+class TestEdgeFilter:
+    def _make_dog_with_curvatures(self, dxx, dyy, dxy=0.0):
+        """Build a minimal DoG octave where pixel (3,3) has the given spatial curvatures."""
+        shape = (7, 7)
+        dogs = [np.zeros(shape) for _ in range(5)]
+        for si in range(5):
+            for ri in range(shape[0]):
+                for ci in range(shape[1]):
+                    dr, dc = ri - 3, ci - 3
+                    dogs[si][ri, ci] = 1.0 + 0.5 * (
+                        dxx * dc * dc + dyy * dr * dr + 2 * dxy * dr * dc
+                    )
+        return [dogs]
+
+    def test_keeps_isotropic_blob(self):
+        """Equal curvatures (ratio 1:1) should pass the edge filter."""
+        dog_pyr = self._make_dog_with_curvatures(-1.0, -1.0)
+        result = filter_edge_responses(dog_pyr, [(0, 2, 3, 3)])
+        assert len(result) == 1
+
+    def test_rejects_strong_edge(self):
+        """Curvature ratio 20:1 exceeds threshold of 10 — should be rejected."""
+        dog_pyr = self._make_dog_with_curvatures(-20.0, -1.0)
+        result = filter_edge_responses(dog_pyr, [(0, 2, 3, 3)])
+        assert len(result) == 0
+
+    def test_rejects_saddle_point(self):
+        """Opposite-sign curvatures (det < 0) should be rejected."""
+        dog_pyr = self._make_dog_with_curvatures(-1.0, 1.0)
+        result = filter_edge_responses(dog_pyr, [(0, 2, 3, 3)])
+        assert len(result) == 0
+
+    def test_keeps_ratio_at_threshold(self):
+        """Curvature ratio exactly 10:1 should pass (not strictly greater)."""
+        dog_pyr = self._make_dog_with_curvatures(-10.0, -1.0)
+        result = filter_edge_responses(dog_pyr, [(0, 2, 3, 3)])
+        assert len(result) == 1
 
 
 if __name__ == "__main__":
