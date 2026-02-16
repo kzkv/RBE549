@@ -1,4 +1,7 @@
 opencv-python~=4.12.0
 opencv-contrib-python~=4.13.0.92
+# SURF requires building from source with NONFREE flag:
+# CMAKE_ARGS="-DOPENCV_ENABLE_NONFREE=ON" pip install --no-binary=opencv-contrib-python opencv-contrib-python
+
 scipy~=1.17.0
 pytest~=9.0.2
