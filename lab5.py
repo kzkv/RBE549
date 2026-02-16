@@ -11,7 +11,7 @@ BOOK_PATH = "book.jpg"
 TABLE_PATH = "table.jpg"
 
 # Lowe's ratio test
-RATIO_THRESHOLD = 0.5
+RATIO_THRESHOLD = 0.75
 
 # Matching
 KNN_NEIGHBORS = 2
@@ -20,6 +20,9 @@ KNN_NEIGHBORS = 2
 FLANN_INDEX_KDTREE = 1
 FLANN_TREES = 5
 FLANN_CHECKS = 100
+
+# SURF
+SURF_HESSIAN_THRESHOLD = 400
 
 # Homography
 MIN_MATCH_COUNT = 10
@@ -38,6 +41,13 @@ def detect_sift(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
     sift = cv2.SIFT_create()
     return sift.detectAndCompute(gray, None)
+
+
+def detect_surf(img):
+    """Detect SURF keypoints and compute descriptors."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+    surf = cv2.xfeatures2d.SURF_create(SURF_HESSIAN_THRESHOLD)
+    return surf.detectAndCompute(gray, None)
 
 
 def match_bruteforce(des1, des2):
@@ -153,7 +163,7 @@ def find_object(query_img, query_kp, scene_img, scene_kp, matches):
 
 def run_combination(detector_name, matcher_name, query_img, scene_img):
     """Run one detector+matcher combination and return the annotated image + match count."""
-    detect_fn = {"SIFT": detect_sift}[detector_name]
+    detect_fn = {"SIFT": detect_sift, "SURF": detect_surf}[detector_name]
     match_fn = {"BF": match_bruteforce, "FLANN": match_flann}[matcher_name]
 
     query_kp, query_des = detect_fn(query_img)
@@ -163,19 +173,23 @@ def run_combination(detector_name, matcher_name, query_img, scene_img):
     return result, len(good)
 
 
+USE_SURF = True
 USE_FLANN = True
 
 if __name__ == "__main__":
     book = cv2.imread(BOOK_PATH)
     table = cv2.imread(TABLE_PATH)
 
+    detector_name = "SURF" if USE_SURF else "SIFT"
     matcher_name = "FLANN" if USE_FLANN else "BF"
-    result, count = run_combination("SIFT", matcher_name, book, table)
+    result, count = run_combination(detector_name, matcher_name, book, table)
 
-    label = f"SIFT + {matcher_name} | ratio {RATIO_THRESHOLD} | {count} matches"
+    label = (
+        f"{detector_name} + {matcher_name} | ratio {RATIO_THRESHOLD} | {count} matches"
+    )
     cv2.putText(result, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, INLIER_COLOR, 2)
 
     print(label)
-    cv2.imshow(f"SIFT + {matcher_name}", result)
+    cv2.imshow(f"{detector_name} + {matcher_name}", result)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
