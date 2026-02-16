@@ -9,6 +9,10 @@ import cv2
 BOOK_PATH = "book.jpg"
 TABLE_PATH = "table.jpg"
 RATIO_THRESHOLD = 0.5
+KNN_K = 2
+FLANN_INDEX_KDTREE = 1
+FLANN_TREES = 5
+FLANN_CHECKS = 100
 
 
 def detect_sift(img):
@@ -21,9 +25,20 @@ def detect_sift(img):
 def match_bruteforce(des1, des2):
     """Match descriptors with BFMatcher + Lowe's ratio test."""
     bf = cv2.BFMatcher(cv2.NORM_L2)
-    raw = bf.knnMatch(des1, des2, k=2)
+    raw = bf.knnMatch(des1, des2, k=KNN_K)
     return [m for m, n in raw if m.distance < RATIO_THRESHOLD * n.distance]
 
+
+def match_flann(des1, des2):
+    """Match descriptors with FLANN + Lowe's ratio test."""
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=FLANN_TREES)
+    search_params = dict(checks=FLANN_CHECKS)
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
+    raw = flann.knnMatch(des1, des2, k=KNN_K)
+    return [m for m, n in raw if m.distance < RATIO_THRESHOLD * n.distance]
+
+
+USE_FLANN = True
 
 if __name__ == "__main__":
     book = cv2.imread(BOOK_PATH)
@@ -31,7 +46,10 @@ if __name__ == "__main__":
 
     kp1, des1 = detect_sift(book)
     kp2, des2 = detect_sift(table)
-    good = match_bruteforce(des1, des2)
+
+    matcher_name = "FLANN" if USE_FLANN else "BF"
+    match_fn = match_flann if USE_FLANN else match_bruteforce
+    good = match_fn(des1, des2)
 
     result = cv2.drawMatches(
         book,
@@ -44,10 +62,10 @@ if __name__ == "__main__":
         flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
     )
 
-    label = f"SIFT + BF | ratio {RATIO_THRESHOLD} | {len(good)} matches"
+    label = f"SIFT + {matcher_name} | ratio {RATIO_THRESHOLD} | {len(good)} matches"
     cv2.putText(result, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
     print(label)
-    cv2.imshow("SIFT + Brute-Force", result)
+    cv2.imshow(f"SIFT + {matcher_name}", result)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
