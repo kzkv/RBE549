@@ -14,7 +14,7 @@ BOOK_PATH = "book.jpg"
 TABLE_PATH = "table.jpg"
 
 # Lowe's ratio test
-RATIO_THRESHOLD = 0.5
+RATIO_THRESHOLD = 0.75
 
 # Matching
 KNN_NEIGHBORS = 2
@@ -39,9 +39,9 @@ BOX_COLOR = (255, 0, 0)
 BOX_THICKNESS = 2
 
 # Camera real-time detection
-CAMERA_DETECTOR = "SIFT"
+CAMERA_DETECTOR = "SURF"
 CAMERA_MATCHER = "FLANN"
-BENCHMARK = True
+BENCHMARK = False
 BENCHMARK_DURATION = 5.0
 REFERENCE_PATH = "captures/reference.jpg"
 THUMBNAIL_WIDTH = 300
@@ -198,6 +198,19 @@ def _camera_match_fn():
     return {"BF": match_bruteforce, "FLANN": match_flann}[CAMERA_MATCHER]
 
 
+def _build_matcher(ref_des):
+    """Pre-build a matcher with the reference descriptors indexed."""
+    if CAMERA_MATCHER == "BF":
+        matcher = cv2.BFMatcher(cv2.NORM_L2)
+    else:
+        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=FLANN_TREES)
+        search_params = dict(checks=FLANN_CHECKS)
+        matcher = cv2.FlannBasedMatcher(index_params, search_params)
+    matcher.add([ref_des])
+    matcher.train()
+    return matcher
+
+
 def init_state():
     """Return Lab 5 state keys with defaults."""
     return {
@@ -205,6 +218,7 @@ def init_state():
         "obj_ref_img": None,
         "obj_ref_kp": None,
         "obj_ref_des": None,
+        "obj_ref_matcher": None,
         "obj_bench_start": None,
     }
 
@@ -222,6 +236,7 @@ def _capture_reference(frame, state):
     kp, des = _camera_detect_fn()(frame)
     state["obj_ref_kp"] = kp
     state["obj_ref_des"] = des
+    state["obj_ref_matcher"] = _build_matcher(des)
     state["obj_detect_active"] = False
     print(
         f"[{CAMERA_DETECTOR}] Reference captured → {REFERENCE_PATH} ({len(kp)} keypoints)"
@@ -239,6 +254,7 @@ def _load_reference(state):
     kp, des = _camera_detect_fn()(ref)
     state["obj_ref_kp"] = kp
     state["obj_ref_des"] = des
+    state["obj_ref_matcher"] = _build_matcher(des)
     print(f"[{CAMERA_DETECTOR}] Reference loaded from disk ({len(kp)} keypoints)")
     return True
 
@@ -283,19 +299,20 @@ def _draw_thumbnail(frame, ref_img):
     cv2.addWeighted(thumb, THUMBNAIL_ALPHA, roi, 1 - THUMBNAIL_ALPHA, 0, roi)
 
 
-def _detect_on_frame(frame, ref_kp, ref_des, ref_shape):
-    """Detect features in frame, match against reference, draw bounding box."""
+def _detect_on_frame(frame, ref_kp, ref_matcher, ref_shape):
+    """Detect features in frame, match against cached reference, draw bounding box."""
     frame_kp, frame_des = _camera_detect_fn()(frame)
     if frame_des is None or len(frame_des) < 2:
         return frame
 
-    good = _camera_match_fn()(ref_des, frame_des)
+    raw = ref_matcher.knnMatch(frame_des, k=KNN_NEIGHBORS)
+    good = [m for m, n in raw if m.distance < RATIO_THRESHOLD * n.distance]
     if len(good) < MIN_MATCH_COUNT:
         return frame
 
     h, w = ref_shape[:2]
-    src_pts = np.float32([ref_kp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst_pts = np.float32([frame_kp[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    src_pts = np.float32([ref_kp[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = np.float32([frame_kp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
     M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, RANSAC_REPROJ_THRESHOLD)
 
     if M is None:
@@ -327,7 +344,7 @@ def apply_effects(img, state):
         if _load_reference(state):
             state["obj_detect_active"] = True
 
-    if not state["obj_detect_active"] or state["obj_ref_des"] is None:
+    if not state["obj_detect_active"] or state["obj_ref_matcher"] is None:
         return img
 
     if BENCHMARK:
@@ -339,7 +356,7 @@ def apply_effects(img, state):
     result = _detect_on_frame(
         img,
         state["obj_ref_kp"],
-        state["obj_ref_des"],
+        state["obj_ref_matcher"],
         state["obj_ref_img"].shape,
     )
     _draw_thumbnail(result, state["obj_ref_img"])
