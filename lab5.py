@@ -6,6 +6,7 @@
 
 import cv2
 import numpy as np
+from pathlib import Path
 
 BOOK_PATH = "book.jpg"
 TABLE_PATH = "table.jpg"
@@ -34,6 +35,13 @@ INLIER_COLOR = (0, 255, 0)
 OUTLIER_COLOR = (0, 0, 255)
 BOX_COLOR = (255, 0, 0)
 BOX_THICKNESS = 2
+
+# Camera real-time detection
+REFERENCE_PATH = "captures/reference.jpg"
+THUMBNAIL_WIDTH = 300
+THUMBNAIL_BORDER = 2
+THUMBNAIL_ALPHA = 0.7
+THUMBNAIL_MARGIN = 10
 
 
 def detect_sift(img):
@@ -173,6 +181,143 @@ def run_combination(detector_name, matcher_name, query_img, scene_img):
     return result, len(good)
 
 
+# Camera integration
+def init_state():
+    """Return Lab 5 state keys with defaults."""
+    return {
+        "obj_detect_active": False,
+        "obj_ref_img": None,
+        "obj_ref_kp": None,
+        "obj_ref_des": None,
+    }
+
+
+def setup_trackbars(window_name, state):
+    """No trackbars needed for Lab 5."""
+    pass
+
+
+def _capture_reference(frame, state):
+    """Save frame as reference and cache SURF keypoints + descriptors."""
+    Path("captures").mkdir(exist_ok=True)
+    cv2.imwrite(REFERENCE_PATH, frame)
+    state["obj_ref_img"] = frame.copy()
+    kp, des = detect_surf(frame)
+    state["obj_ref_kp"] = kp
+    state["obj_ref_des"] = des
+    state["obj_detect_active"] = False
+    print(f"Reference captured → {REFERENCE_PATH} ({len(kp)} keypoints)")
+
+
+def _load_reference(state):
+    """Load persisted reference from disk if not already in memory."""
+    if state["obj_ref_img"] is not None:
+        return True
+    ref = cv2.imread(REFERENCE_PATH)
+    if ref is None:
+        return False
+    state["obj_ref_img"] = ref
+    kp, des = detect_surf(ref)
+    state["obj_ref_kp"] = kp
+    state["obj_ref_des"] = des
+    print(f"Reference loaded from disk ({len(kp)} keypoints)")
+    return True
+
+
+def handle_key(key, state, frame):
+    """Handle Lab 5 key presses. Returns True if key was handled."""
+    if key == ord("o"):
+        _capture_reference(frame, state)
+        return True
+    if key == ord("p"):
+        if not _load_reference(state):
+            print("No reference — press 'o' to capture")
+            return True
+        state["obj_detect_active"] = not state["obj_detect_active"]
+        status = "ON" if state["obj_detect_active"] else "OFF"
+        print(f"Object detection: {status}")
+        return True
+    return False
+
+
+def _draw_thumbnail(frame, ref_img):
+    """Draw a small reference thumbnail at the mid-left border."""
+    rh, rw = ref_img.shape[:2]
+    thumb_w = THUMBNAIL_WIDTH
+    thumb_h = int(rh * thumb_w / rw)
+    thumb = cv2.resize(ref_img, (thumb_w, thumb_h))
+
+    fh, fw = frame.shape[:2]
+    x1 = THUMBNAIL_MARGIN
+    y1 = (fh - thumb_h - THUMBNAIL_BORDER * 2) // 2
+    x2 = x1 + thumb_w + THUMBNAIL_BORDER * 2
+    y2 = y1 + thumb_h + THUMBNAIL_BORDER * 2
+
+    if x1 < 0 or y1 < 0 or x2 > fw or y2 > fh:
+        return
+
+    frame[y1:y2, x1:x2] = 255
+    roi = frame[
+        y1 + THUMBNAIL_BORDER : y2 - THUMBNAIL_BORDER,
+        x1 + THUMBNAIL_BORDER : x2 - THUMBNAIL_BORDER,
+    ]
+    cv2.addWeighted(thumb, THUMBNAIL_ALPHA, roi, 1 - THUMBNAIL_ALPHA, 0, roi)
+
+
+def _detect_on_frame(frame, ref_kp, ref_des, ref_shape):
+    """Detect SURF in frame, match against reference, draw bounding box."""
+    frame_kp, frame_des = detect_surf(frame)
+    if frame_des is None or len(frame_des) < 2:
+        return frame
+
+    good = match_flann(ref_des, frame_des)
+    if len(good) < MIN_MATCH_COUNT:
+        return frame
+
+    h, w = ref_shape[:2]
+    src_pts = np.float32([ref_kp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = np.float32([frame_kp[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, RANSAC_REPROJ_THRESHOLD)
+
+    if M is None:
+        return frame
+
+    query_corners = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
+    scene_corners = cv2.perspectiveTransform(query_corners, M)
+    cv2.polylines(frame, [np.int32(scene_corners)], True, BOX_COLOR, BOX_THICKNESS)
+
+    inlier_count = int(mask.sum()) if mask is not None else 0
+    label = f"Matches: {len(good)} | Inliers: {inlier_count}"
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+    lx = (frame.shape[1] - tw) // 2
+    cv2.putText(
+        frame,
+        label,
+        (lx, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        BOX_COLOR,
+        2,
+    )
+    return frame
+
+
+def apply_effects(img, state):
+    """Apply Lab 5 real-time object detection overlay."""
+    if not state["obj_detect_active"] or state["obj_ref_des"] is None:
+        return img
+
+    result = _detect_on_frame(
+        img,
+        state["obj_ref_kp"],
+        state["obj_ref_des"],
+        state["obj_ref_img"].shape,
+    )
+    _draw_thumbnail(result, state["obj_ref_img"])
+    return result
+
+
+# Standalone execution
 USE_SURF = True
 USE_FLANN = True
 
