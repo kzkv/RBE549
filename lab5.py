@@ -4,6 +4,8 @@
 # SURF requires OpenCV built with NONFREE flag:
 # CMAKE_ARGS="-DOPENCV_ENABLE_NONFREE=ON" pip install --no-binary=opencv-contrib-python opencv-contrib-python
 
+import time
+
 import cv2
 import numpy as np
 from pathlib import Path
@@ -12,7 +14,7 @@ BOOK_PATH = "book.jpg"
 TABLE_PATH = "table.jpg"
 
 # Lowe's ratio test
-RATIO_THRESHOLD = 0.75
+RATIO_THRESHOLD = 0.5
 
 # Matching
 KNN_NEIGHBORS = 2
@@ -37,6 +39,10 @@ BOX_COLOR = (255, 0, 0)
 BOX_THICKNESS = 2
 
 # Camera real-time detection
+CAMERA_DETECTOR = "SIFT"
+CAMERA_MATCHER = "FLANN"
+BENCHMARK = True
+BENCHMARK_DURATION = 5.0
 REFERENCE_PATH = "captures/reference.jpg"
 THUMBNAIL_WIDTH = 300
 THUMBNAIL_BORDER = 2
@@ -182,6 +188,16 @@ def run_combination(detector_name, matcher_name, query_img, scene_img):
 
 
 # Camera integration
+def _camera_detect_fn():
+    """Return the detector function selected by CAMERA_DETECTOR."""
+    return {"SIFT": detect_sift, "SURF": detect_surf}[CAMERA_DETECTOR]
+
+
+def _camera_match_fn():
+    """Return the matcher function selected by CAMERA_MATCHER."""
+    return {"BF": match_bruteforce, "FLANN": match_flann}[CAMERA_MATCHER]
+
+
 def init_state():
     """Return Lab 5 state keys with defaults."""
     return {
@@ -189,6 +205,7 @@ def init_state():
         "obj_ref_img": None,
         "obj_ref_kp": None,
         "obj_ref_des": None,
+        "obj_bench_start": None,
     }
 
 
@@ -198,15 +215,17 @@ def setup_trackbars(window_name, state):
 
 
 def _capture_reference(frame, state):
-    """Save frame as reference and cache SURF keypoints + descriptors."""
+    """Save frame as reference and cache keypoints + descriptors."""
     Path("captures").mkdir(exist_ok=True)
     cv2.imwrite(REFERENCE_PATH, frame)
     state["obj_ref_img"] = frame.copy()
-    kp, des = detect_surf(frame)
+    kp, des = _camera_detect_fn()(frame)
     state["obj_ref_kp"] = kp
     state["obj_ref_des"] = des
     state["obj_detect_active"] = False
-    print(f"Reference captured → {REFERENCE_PATH} ({len(kp)} keypoints)")
+    print(
+        f"[{CAMERA_DETECTOR}] Reference captured → {REFERENCE_PATH} ({len(kp)} keypoints)"
+    )
 
 
 def _load_reference(state):
@@ -217,10 +236,10 @@ def _load_reference(state):
     if ref is None:
         return False
     state["obj_ref_img"] = ref
-    kp, des = detect_surf(ref)
+    kp, des = _camera_detect_fn()(ref)
     state["obj_ref_kp"] = kp
     state["obj_ref_des"] = des
-    print(f"Reference loaded from disk ({len(kp)} keypoints)")
+    print(f"[{CAMERA_DETECTOR}] Reference loaded from disk ({len(kp)} keypoints)")
     return True
 
 
@@ -265,12 +284,12 @@ def _draw_thumbnail(frame, ref_img):
 
 
 def _detect_on_frame(frame, ref_kp, ref_des, ref_shape):
-    """Detect SURF in frame, match against reference, draw bounding box."""
-    frame_kp, frame_des = detect_surf(frame)
+    """Detect features in frame, match against reference, draw bounding box."""
+    frame_kp, frame_des = _camera_detect_fn()(frame)
     if frame_des is None or len(frame_des) < 2:
         return frame
 
-    good = match_flann(ref_des, frame_des)
+    good = _camera_match_fn()(ref_des, frame_des)
     if len(good) < MIN_MATCH_COUNT:
         return frame
 
@@ -304,8 +323,18 @@ def _detect_on_frame(frame, ref_kp, ref_des, ref_shape):
 
 def apply_effects(img, state):
     """Apply Lab 5 real-time object detection overlay."""
+    if BENCHMARK and state["obj_ref_img"] is None:
+        if _load_reference(state):
+            state["obj_detect_active"] = True
+
     if not state["obj_detect_active"] or state["obj_ref_des"] is None:
         return img
+
+    if BENCHMARK:
+        if state["obj_bench_start"] is None:
+            state["obj_bench_start"] = time.time()
+        if time.time() - state["obj_bench_start"] >= BENCHMARK_DURATION:
+            raise SystemExit
 
     result = _detect_on_frame(
         img,
