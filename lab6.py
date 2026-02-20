@@ -85,6 +85,39 @@ def draw_matches(img1, kp1, img2, kp2, matches, mask):
     return canvas
 
 
+def stitch_pair(img1, img2, H):
+    """Warp img2 into img1's frame, composite, and crop to img1's vertical extent."""
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+
+    corners2 = np.float32([[0, 0], [w2, 0], [w2, h2], [0, h2]]).reshape(-1, 1, 2)
+    warped_corners = cv2.perspectiveTransform(corners2, H)
+
+    corners1 = np.float32([[0, 0], [w1, 0], [w1, h1], [0, h1]]).reshape(-1, 1, 2)
+    all_corners = np.concatenate([corners1, warped_corners])
+
+    x_min, y_min = np.int32(all_corners.min(axis=0).ravel())
+    x_max, y_max = np.int32(all_corners.max(axis=0).ravel())
+
+    # Translation to shift everything into positive coordinates.
+    tx, ty = -x_min, -y_min
+    T = np.array([[1, 0, tx], [0, 1, ty], [0, 0, 1]], dtype=np.float64)
+
+    canvas_w, canvas_h = x_max - x_min, y_max - y_min
+    canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+    canvas[ty : ty + h1, tx : tx + w1] = img1
+    warped = cv2.warpPerspective(img2, T @ H, (canvas_w, canvas_h))
+    mask = warped.any(axis=2)
+    canvas[mask] = warped[mask]
+
+    # Crop vertically to img1's extent, then horizontally to the last full column.
+    cropped = canvas[ty : ty + h1, :]
+    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+    full_columns = np.all(gray > 0, axis=0)
+    right_bound = np.max(np.where(full_columns)) + 1
+    return cropped[:, :right_bound]
+
+
 if __name__ == "__main__":
     img1 = cv2.imread(BOSTON1_PATH)
     img2 = cv2.imread(BOSTON2_PATH)
@@ -101,5 +134,8 @@ if __name__ == "__main__":
 
     vis = draw_matches(img1, kp1, img2, kp2, matches, mask)
     cv2.imshow("Matches", vis)
+
+    panorama = stitch_pair(img1, img2, H)
+    cv2.imshow("Panorama", panorama)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
