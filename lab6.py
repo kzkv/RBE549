@@ -136,6 +136,10 @@ if __name__ == "__main__":
     cv2.imshow("Matches", vis)
 
     panorama = stitch_pair(img1, img2, H)
+    cv2.imwrite(PANORAMA_OUTPUT_PATH, panorama)
+    print(f"Panorama saved: {PANORAMA_OUTPUT_PATH} ({panorama.shape[1]}x{panorama.shape[0]})")
+
+    cv2.imshow("Matches", vis)
     cv2.imshow("Panorama", panorama)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
