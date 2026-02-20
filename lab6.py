@@ -27,6 +27,9 @@ RANSAC_REPROJ_THRESHOLD = 5.0
 INLIER_COLOR = (0, 255, 0)
 OUTLIER_COLOR = (0, 0, 255)
 
+# cv2.Stitcher
+STITCH_MODE = cv2.Stitcher_PANORAMA
+
 
 def detect_keypoints(img):
     """Detect SIFT keypoints and compute descriptors."""
@@ -118,6 +121,13 @@ def stitch_pair(img1, img2, H):
     return cropped[:, :right_bound]
 
 
+def stitch_images(images):
+    """Stitch multiple images using cv2.Stitcher."""
+    stitcher = cv2.Stitcher.create(STITCH_MODE)
+    status, result = stitcher.stitch(images)
+    return status, result
+
+
 if __name__ == "__main__":
     img1 = cv2.imread(BOSTON1_PATH)
     img2 = cv2.imread(BOSTON2_PATH)
@@ -139,7 +149,15 @@ if __name__ == "__main__":
     cv2.imwrite(PANORAMA_OUTPUT_PATH, panorama)
     print(f"Panorama saved: {PANORAMA_OUTPUT_PATH} ({panorama.shape[1]}x{panorama.shape[0]})")
 
+    status, auto_panorama = stitch_images([img1, img2])
+    if status == cv2.Stitcher_OK:
+        print(f"Stitcher panorama: {auto_panorama.shape[1]}x{auto_panorama.shape[0]}")
+    else:
+        print(f"Stitcher failed with status {status}")
+
     cv2.imshow("Matches", vis)
-    cv2.imshow("Panorama", panorama)
+    cv2.imshow("Manual Panorama", panorama)
+    if status == cv2.Stitcher_OK:
+        cv2.imshow("Stitcher Panorama", auto_panorama)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
