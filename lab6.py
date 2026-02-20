@@ -29,6 +29,7 @@ OUTLIER_COLOR = (0, 0, 255)
 
 # cv2.Stitcher
 STITCH_MODE = cv2.Stitcher_PANORAMA
+MAX_BUFFER_FRAMES = 10
 
 
 def detect_keypoints(img):
@@ -128,6 +129,68 @@ def stitch_images(images):
     return status, result
 
 
+# Camera integration
+def init_state():
+    """Return Lab 6 state keys with defaults."""
+    return {
+        "pano_buffer": [],
+        "pano_result": None,
+        "pano_active": False,
+    }
+
+
+def setup_trackbars(window_name, state):
+    """No trackbars needed for Lab 6."""
+    pass
+
+
+def handle_key(key, state, frame):
+    """Handle Lab 6 key presses. Returns True if key was handled."""
+    if key == ord("n"):
+        if len(state["pano_buffer"]) >= MAX_BUFFER_FRAMES:
+            print(f"Buffer full ({MAX_BUFFER_FRAMES} frames)")
+            return True
+        state["pano_buffer"].append(frame.copy())
+        print(f"Panorama buffer: {len(state['pano_buffer'])} frames")
+        return True
+    if key == ord("m"):
+        if state["pano_active"]:
+            state["pano_active"] = False
+            state["pano_result"] = None
+            state["pano_buffer"] = []
+            print("Panorama dismissed, buffer cleared")
+            return True
+        if len(state["pano_buffer"]) < 2:
+            print(f"Need at least 2 frames (have {len(state['pano_buffer'])})")
+            return True
+        status, result = stitch_images(state["pano_buffer"])
+        if status == cv2.Stitcher_OK:
+            state["pano_result"] = result
+            state["pano_active"] = True
+            print(f"Stitched {len(state['pano_buffer'])} frames")
+        else:
+            print(f"Stitching failed (status {status}) — try more overlap")
+        return True
+    return False
+
+
+def apply_effects(img, state):
+    """Display stitched panorama when active, otherwise pass through."""
+    if not state["pano_active"] or state["pano_result"] is None:
+        return img
+    fh, fw = img.shape[:2]
+    pano = state["pano_result"]
+    ph, pw = pano.shape[:2]
+    scale = min(fw / pw, fh / ph)
+    resized = cv2.resize(pano, (int(pw * scale), int(ph * scale)))
+    rh, rw = resized.shape[:2]
+    canvas = np.zeros_like(img)
+    y_off = (fh - rh) // 2
+    x_off = (fw - rw) // 2
+    canvas[y_off : y_off + rh, x_off : x_off + rw] = resized
+    return canvas
+
+
 if __name__ == "__main__":
     img1 = cv2.imread(BOSTON1_PATH)
     img2 = cv2.imread(BOSTON2_PATH)
@@ -147,7 +210,9 @@ if __name__ == "__main__":
 
     panorama = stitch_pair(img1, img2, H)
     cv2.imwrite(PANORAMA_OUTPUT_PATH, panorama)
-    print(f"Panorama saved: {PANORAMA_OUTPUT_PATH} ({panorama.shape[1]}x{panorama.shape[0]})")
+    print(
+        f"Panorama saved: {PANORAMA_OUTPUT_PATH} ({panorama.shape[1]}x{panorama.shape[0]})"
+    )
 
     status, auto_panorama = stitch_images([img1, img2])
     if status == cv2.Stitcher_OK:
