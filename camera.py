@@ -10,6 +10,7 @@ import lab2
 import lab3
 import lab4
 import lab5
+import lab6
 
 CAMERA_INDEX = 0
 WINDOW_NAME = "RBE 549 Camera"
@@ -27,12 +28,13 @@ def create_state():
     state.update(lab3.init_state())
     state.update(lab4.init_state())
     state.update(lab5.init_state())
+    state.update(lab6.init_state())
     return state
 
 
 def draw_help_text(display):
     """Draw keyboard shortcuts legend at bottom left."""
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp  g+x/y: sobel  d: canny  l: laplacian  4: quad  f: features  o: ref  p: detect"
+    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp  g+x/y: sobel  d: canny  l: laplacian  4: quad  f: features  o: ref  p: detect  n: pano+  m: stitch"
     (help_w, help_h), help_baseline = cv2.getTextSize(
         help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
     )
@@ -68,6 +70,7 @@ def main():
     lab3.setup_trackbars(WINDOW_NAME, state)
     lab4.setup_trackbars(WINDOW_NAME, state)
     lab5.setup_trackbars(WINDOW_NAME, state)
+    lab6.setup_trackbars(WINDOW_NAME, state)
     lab2.setup_mouse_callback(WINDOW_NAME, state)
 
     logo, logo_h, logo_w = lab2.load_logo()
@@ -87,6 +90,7 @@ def main():
         display = lab3.apply_effects(display, state)
         display = lab4.apply_effects(display, state)
         display = lab5.apply_effects(display, state)
+        display = lab6.apply_effects(display, state)
 
         # Video recording
         if video:
@@ -137,6 +141,10 @@ def main():
 
         # Lab 5 keys
         if lab5.handle_key(key, state, zoomed):
+            continue
+
+        # Lab 6 keys
+        if lab6.handle_key(key, state, zoomed):
             continue
 
         # Shared keys

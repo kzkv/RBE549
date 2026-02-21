@@ -37,28 +37,18 @@ def setup_trackbars(window_name, state):
     """Create Lab 3 trackbars."""
 
     def on_sobel_ksize(v):
-        if v < SOBEL_KSIZE_MIN:
-            v = SOBEL_KSIZE_MIN
-        elif v % 2 == 0:
-            v = v + 1
-        if v > SOBEL_KSIZE_MAX:
-            v = SOBEL_KSIZE_MAX
-        cv2.setTrackbarPos("Sobel ksize: ", window_name, v)
+        v = max(v, SOBEL_KSIZE_MIN)
+        v = v + 1 if v % 2 == 0 else v
+        v = min(v, SOBEL_KSIZE_MAX)
         state["sobel_ksize"] = v
 
     cv2.createTrackbar("Sobel ksize: ", window_name, 3, SOBEL_KSIZE_MAX, on_sobel_ksize)
 
     def on_canny_thresh1(v):
-        if v < CANNY_THRESH_MIN:
-            cv2.setTrackbarPos("Canny T1: ", window_name, CANNY_THRESH_MIN)
-            v = CANNY_THRESH_MIN
-        state["canny_thresh1"] = v
+        state["canny_thresh1"] = max(v, CANNY_THRESH_MIN)
 
     def on_canny_thresh2(v):
-        if v < CANNY_THRESH_MIN:
-            cv2.setTrackbarPos("Canny T2: ", window_name, CANNY_THRESH_MIN)
-            v = CANNY_THRESH_MIN
-        state["canny_thresh2"] = v
+        state["canny_thresh2"] = max(v, CANNY_THRESH_MIN)
 
     cv2.createTrackbar(
         "Canny T1: ",

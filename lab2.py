@@ -67,18 +67,10 @@ def setup_trackbars(window_name, state):
     """Create Lab 2 trackbars."""
 
     def on_blur_sigma(v):
-        if v < BLUR_SIGMA_MIN:
-            cv2.setTrackbarPos("Blur Sigma: ", window_name, BLUR_SIGMA_MIN)
-            state["blur_sigma"] = BLUR_SIGMA_MIN
-        else:
-            state["blur_sigma"] = v
+        state["blur_sigma"] = max(v, BLUR_SIGMA_MIN)
 
     def on_sharpen_amount(v):
-        if v < SHARPEN_AMOUNT_MIN:
-            cv2.setTrackbarPos("Sharpen: ", window_name, SHARPEN_AMOUNT_MIN)
-            state["sharpen_amount"] = SHARPEN_AMOUNT_MIN
-        else:
-            state["sharpen_amount"] = v
+        state["sharpen_amount"] = max(v, SHARPEN_AMOUNT_MIN)
 
     cv2.createTrackbar(
         "Blur Sigma: ", window_name, BLUR_SIGMA_MIN, BLUR_SIGMA_MAX, on_blur_sigma
