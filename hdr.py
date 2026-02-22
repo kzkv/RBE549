@@ -12,6 +12,10 @@ GAMMA_UNDER = 3.0
 GAMMA_NORMAL = 1.0
 GAMMA_OVER = 0.2
 
+THUMBNAIL_SCALE = 0.15
+HELP_BAR_HEIGHT = 25
+WATERMARK_TEXT = "HDR"
+
 
 def load_exposure_bracket(paths):
     """Load a sequence of bracketed-exposure images."""
@@ -46,15 +50,12 @@ def build_gamma_lut(gamma):
     return table.astype(np.uint8)
 
 
-class CaptureWorker:
-    """One thread in the bracket capture system, responsible for one exposure level."""
+class ExposureWorker:
+    """One thread in the bracket system, applies a fixed gamma LUT."""
 
-    def __init__(self, gamma, cap, cap_lock, barrier, stop_event):
+    def __init__(self, gamma, bracket):
         self.lut = build_gamma_lut(gamma)
-        self.cap = cap
-        self.cap_lock = cap_lock
-        self.barrier = barrier
-        self.stop_event = stop_event
+        self.bracket = bracket
         self.frame = None
         self.thread = threading.Thread(target=self._run, daemon=True)
 
@@ -62,91 +63,142 @@ class CaptureWorker:
         self.thread.start()
 
     def _run(self):
-        while not self.stop_event.is_set():
-            with self.cap_lock:
-                ret, raw = self.cap.read()
-            if not ret:
-                continue
-            self.frame = cv2.LUT(raw, self.lut)
+        while not self.bracket.stop_event.is_set():
             try:
-                self.barrier.wait(timeout=1.0)
+                self.bracket.start_barrier.wait(timeout=1.0)
+            except threading.BrokenBarrierError:
+                break
+            if self.bracket.stop_event.is_set():
+                break
+            self.frame = cv2.LUT(self.bracket.source_frame, self.lut)
+            try:
+                self.bracket.done_barrier.wait(timeout=1.0)
             except threading.BrokenBarrierError:
                 break
 
 
-class BracketCapture:
-    """Synchronized three-thread exposure bracket capture from a single camera."""
+class ExposureBracket:
+    """Three-thread exposure bracket processor using two-barrier synchronization."""
 
-    def __init__(self, camera_index=0):
-        self.cap = cv2.VideoCapture(camera_index)
-        self.cap_lock = threading.Lock()
+    def __init__(self):
         self.stop_event = threading.Event()
-        self.barrier = threading.Barrier(4)
+        self.start_barrier = threading.Barrier(4)
+        self.done_barrier = threading.Barrier(4)
+        self.source_frame = None
         gammas = [GAMMA_UNDER, GAMMA_NORMAL, GAMMA_OVER]
-        self.workers = [
-            CaptureWorker(g, self.cap, self.cap_lock, self.barrier, self.stop_event)
-            for g in gammas
-        ]
+        self.workers = [ExposureWorker(g, self) for g in gammas]
 
     def start(self):
         for w in self.workers:
             w.start()
 
-    def get_triplet(self):
-        """Block until all three workers have a frame, then return (under, normal, over)."""
+    def process(self, frame):
+        """Post a frame, wait for all three workers, return the triplet."""
+        self.source_frame = frame
         try:
-            self.barrier.wait(timeout=1.0)
+            self.start_barrier.wait(timeout=1.0)
+            self.done_barrier.wait(timeout=1.0)
         except threading.BrokenBarrierError:
             return None
-        return tuple(w.frame for w in self.workers)
+        return [w.frame for w in self.workers]
 
     def stop(self):
         self.stop_event.set()
-        self.barrier.abort()
+        self.start_barrier.abort()
+        self.done_barrier.abort()
         for w in self.workers:
             w.thread.join(timeout=2.0)
-        self.cap.release()
 
 
-def run_hdr_capture(camera_index=0):
-    """Live preview of three synchronized exposure streams."""
-    bracket_cap = BracketCapture(camera_index)
-    if not bracket_cap.cap.isOpened():
-        print("ERROR: cannot open camera")
-        return
+def add_watermark(image):
+    """Draw semi-transparent HDR watermark in the top-right corner."""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 1.5
+    thickness = 3
+    (tw, th), _ = cv2.getTextSize(WATERMARK_TEXT, font, scale, thickness)
+    h, w = image.shape[:2]
+    x = w - tw - 20
+    y = th + 20
+    overlay = image.copy()
+    cv2.putText(overlay, WATERMARK_TEXT, (x, y), font, scale, (0, 255, 0), thickness)
+    cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+    return image
 
-    bracket_cap.start()
-    print("HDR capture running. Press 'q' to quit.")
 
+def draw_thumbnails(display, triplet):
+    """Draw under/normal/over thumbnails in the bottom-left, above the help bar."""
+    h, w = display.shape[:2]
     labels = ["Under", "Normal", "Over"]
-    while True:
-        triplet = bracket_cap.get_triplet()
-        if triplet is None:
-            continue
+    thumb_w = int(w * THUMBNAIL_SCALE)
 
-        panels = []
-        for frame, label in zip(triplet, labels):
-            annotated = frame.copy()
-            cv2.putText(
-                annotated,
-                label,
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2,
-            )
-            panels.append(annotated)
+    thumbs = []
+    for frame, label in zip(triplet, labels):
+        fh, fw = frame.shape[:2]
+        thumb_h = int(fh * thumb_w / fw)
+        thumb = cv2.resize(frame, (thumb_w, thumb_h))
+        cv2.putText(thumb, label, (4, 14), cv2.FONT_HERSHEY_PLAIN, 0.9, (0, 255, 0), 1)
+        thumbs.append(thumb)
 
-        display = np.hstack(panels)
-        cv2.imshow("HDR Bracket Capture", display)
+    strip = np.hstack(thumbs)
+    sh, sw = strip.shape[:2]
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+    pad = 5
+    y_start = h - HELP_BAR_HEIGHT - sh - pad
+    x_start = pad
 
-    bracket_cap.stop()
-    cv2.destroyAllWindows()
+    if y_start >= 0 and x_start + sw <= w:
+        display[y_start : y_start + sh, x_start : x_start + sw] = strip
+
+
+def init_state():
+    return {
+        "hdr_active": False,
+        "hdr_bracket": None,
+    }
+
+
+def setup_trackbars(window_name, state):
+    pass
+
+
+def handle_key(key, state):
+    if key != ord("h"):
+        return False
+    state["hdr_active"] = not state["hdr_active"]
+    if state["hdr_active"]:
+        if state["hdr_bracket"] is None:
+            state["hdr_bracket"] = ExposureBracket()
+            state["hdr_bracket"].start()
+        print("HDR mode ON")
+    else:
+        if state["hdr_bracket"] is not None:
+            state["hdr_bracket"].stop()
+            state["hdr_bracket"] = None
+        print("HDR mode OFF")
+    return True
+
+
+def apply_effects(img, state):
+    """When HDR is active, fuse the bracket and overlay thumbnails."""
+    if not state["hdr_active"] or state["hdr_bracket"] is None:
+        return img
+    triplet = state["hdr_bracket"].process(img)
+    if triplet is None:
+        return img
+    fused = fuse_mertens(triplet)
+    fused = add_watermark(fused)
+    draw_thumbnails(fused, triplet)
+    return fused
 
 
 if __name__ == "__main__":
-    run_hdr_capture()
+    bracket = load_exposure_bracket(BRACKET_PATHS)
+    aligned = align_exposures(bracket)
+    result = fuse_mertens(aligned)
+
+    cv2.imwrite(HDR_OUTPUT_PATH, result)
+    print(f"Saved {HDR_OUTPUT_PATH}")
+
+    cv2.imshow("HDR - Mertens Fusion", result)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
