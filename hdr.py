@@ -1,12 +1,16 @@
+import threading
+
 import cv2
 import numpy as np
-
-# Switch between modes without changing run config: "fusion", "probe", "simulate"
-RUN_MODE = "simulate"
 
 # Part 1: input bracket and output path
 BRACKET_PATHS = ["IMAGE_1.JPG", "IMAGE_2.JPG", "IMAGE_3.JPG"]
 HDR_OUTPUT_PATH = "HDR.jpg"
+
+# Software exposure simulation: gamma > 1 darkens, gamma < 1 brightens
+GAMMA_UNDER = 3.0
+GAMMA_NORMAL = 1.0
+GAMMA_OVER = 0.2
 
 
 def load_exposure_bracket(paths):
@@ -35,58 +39,6 @@ def fuse_mertens(images):
     return np.clip(fusion * 255, 0, 255).astype(np.uint8)
 
 
-SETTLE_FRAMES = 15
-EXPOSURE_LEVELS = [-10, -5, -2]
-
-# Software exposure simulation: gamma > 1 darkens, gamma < 1 brightens
-GAMMA_UNDER = 3.0
-GAMMA_NORMAL = 1.0
-GAMMA_OVER = 0.2
-
-
-def probe_exposure(camera_index=0):
-    """Test whether the camera supports manual exposure bracketing."""
-    cap = cv2.VideoCapture(camera_index)
-    if not cap.isOpened():
-        print("ERROR: cannot open camera")
-        return
-
-    print(f"Backend: {cap.getBackendName()}")
-    print(f"Auto exposure: {cap.get(cv2.CAP_PROP_AUTO_EXPOSURE)}")
-    print(f"Current exposure: {cap.get(cv2.CAP_PROP_EXPOSURE)}")
-
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-    print(f"Auto exposure after disable: {cap.get(cv2.CAP_PROP_AUTO_EXPOSURE)}")
-
-    frames = []
-    for level in EXPOSURE_LEVELS:
-        cap.set(cv2.CAP_PROP_EXPOSURE, level)
-        actual = cap.get(cv2.CAP_PROP_EXPOSURE)
-        for _ in range(SETTLE_FRAMES):
-            cap.read()
-        ret, frame = cap.read()
-        if not ret:
-            print(f"  exposure={level}: FAILED to capture")
-            continue
-        mean_brightness = np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-        print(
-            f"  exposure={level} (actual={actual}): mean brightness={mean_brightness:.1f}"
-        )
-        label = f"exp={level} bright={mean_brightness:.0f}"
-        cv2.putText(frame, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        frames.append(frame)
-
-    cap.release()
-
-    if len(frames) == 3:
-        comparison = np.hstack(frames)
-        cv2.imshow("Exposure Bracket Test", comparison)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-    else:
-        print("Could not capture all three exposure levels")
-
-
 def build_gamma_lut(gamma):
     """Build a 256-entry lookup table for gamma correction."""
     table = np.arange(256, dtype=np.float32) / 255.0
@@ -94,69 +46,107 @@ def build_gamma_lut(gamma):
     return table.astype(np.uint8)
 
 
-def adjust_exposure(image, gamma):
-    """Simulate exposure change via gamma correction using a LUT."""
-    return cv2.LUT(image, build_gamma_lut(gamma))
+class CaptureWorker:
+    """One thread in the bracket capture system, responsible for one exposure level."""
+
+    def __init__(self, gamma, cap, cap_lock, barrier, stop_event):
+        self.lut = build_gamma_lut(gamma)
+        self.cap = cap
+        self.cap_lock = cap_lock
+        self.barrier = barrier
+        self.stop_event = stop_event
+        self.frame = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def _run(self):
+        while not self.stop_event.is_set():
+            with self.cap_lock:
+                ret, raw = self.cap.read()
+            if not ret:
+                continue
+            self.frame = cv2.LUT(raw, self.lut)
+            try:
+                self.barrier.wait(timeout=1.0)
+            except threading.BrokenBarrierError:
+                break
 
 
-def simulate_exposure(camera_index=0):
-    """Capture one frame and show software-simulated exposure bracket + fusion."""
-    cap = cv2.VideoCapture(camera_index)
-    if not cap.isOpened():
+class BracketCapture:
+    """Synchronized three-thread exposure bracket capture from a single camera."""
+
+    def __init__(self, camera_index=0):
+        self.cap = cv2.VideoCapture(camera_index)
+        self.cap_lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.barrier = threading.Barrier(4)
+        gammas = [GAMMA_UNDER, GAMMA_NORMAL, GAMMA_OVER]
+        self.workers = [
+            CaptureWorker(g, self.cap, self.cap_lock, self.barrier, self.stop_event)
+            for g in gammas
+        ]
+
+    def start(self):
+        for w in self.workers:
+            w.start()
+
+    def get_triplet(self):
+        """Block until all three workers have a frame, then return (under, normal, over)."""
+        try:
+            self.barrier.wait(timeout=1.0)
+        except threading.BrokenBarrierError:
+            return None
+        return tuple(w.frame for w in self.workers)
+
+    def stop(self):
+        self.stop_event.set()
+        self.barrier.abort()
+        for w in self.workers:
+            w.thread.join(timeout=2.0)
+        self.cap.release()
+
+
+def run_hdr_capture(camera_index=0):
+    """Live preview of three synchronized exposure streams."""
+    bracket_cap = BracketCapture(camera_index)
+    if not bracket_cap.cap.isOpened():
         print("ERROR: cannot open camera")
         return
 
-    for _ in range(SETTLE_FRAMES):
-        cap.read()
-    ret, frame = cap.read()
-    cap.release()
-    if not ret:
-        print("ERROR: failed to capture frame")
-        return
+    bracket_cap.start()
+    print("HDR capture running. Press 'q' to quit.")
 
-    gammas = [GAMMA_UNDER, GAMMA_NORMAL, GAMMA_OVER]
     labels = ["Under", "Normal", "Over"]
-    bracket = [adjust_exposure(frame, g) for g in gammas]
+    while True:
+        triplet = bracket_cap.get_triplet()
+        if triplet is None:
+            continue
 
-    fused = fuse_mertens(bracket)
+        panels = []
+        for frame, label in zip(triplet, labels):
+            annotated = frame.copy()
+            cv2.putText(
+                annotated,
+                label,
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
+                2,
+            )
+            panels.append(annotated)
 
-    display_frames = []
-    for img, label, gamma in zip(bracket, labels, gammas):
-        mean_b = np.mean(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
-        text = f"{label} (g={gamma}) bright={mean_b:.0f}"
-        annotated = img.copy()
-        cv2.putText(
-            annotated, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
-        )
-        display_frames.append(annotated)
+        display = np.hstack(panels)
+        cv2.imshow("HDR Bracket Capture", display)
 
-    cv2.putText(
-        fused, "Mertens Fusion", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
-    )
-    display_frames.append(fused)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
 
-    top = np.hstack(display_frames[:2])
-    bottom = np.hstack(display_frames[2:])
-    grid = np.vstack([top, bottom])
-
-    cv2.imshow("Simulated Exposure Bracket + Fusion", grid)
-    cv2.waitKey(0)
+    bracket_cap.stop()
     cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    if RUN_MODE == "probe":
-        probe_exposure()
-    elif RUN_MODE == "simulate":
-        simulate_exposure()
-    elif RUN_MODE == "fusion":
-        bracket = load_exposure_bracket(BRACKET_PATHS)
-        aligned = align_exposures(bracket)
-        result = fuse_mertens(aligned)
-
-        cv2.imwrite(HDR_OUTPUT_PATH, result)
-        print(f"Saved {HDR_OUTPUT_PATH}")
-
-        cv2.imshow("HDR - Mertens Fusion", result)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    run_hdr_capture()
