@@ -98,10 +98,13 @@ def main():
 
         # Video recording
         if video:
-            stamped = lab2.apply_effects(zoomed, state)
-            stamped = lab3.apply_effects(stamped, state)
-            lab1.draw_timestamp(stamped, include_seconds=True)
-            video.write(stamped)
+            if state["hdr_active"]:
+                rec_frame = display.copy()
+            else:
+                rec_frame = lab2.apply_effects(zoomed, state)
+                rec_frame = lab3.apply_effects(rec_frame, state)
+            lab1.draw_timestamp(rec_frame, include_seconds=True)
+            video.write(rec_frame)
 
         # Draw timestamp and copy ROI to top right
         roi_bounds = lab1.draw_timestamp(display, include_seconds=True)
