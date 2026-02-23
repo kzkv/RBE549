@@ -35,31 +35,32 @@ def create_state():
 
 
 def draw_help_text(display):
-    """Draw keyboard shortcuts legend at bottom left."""
-    help_text = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp  g+x/y: sobel  d: canny  l: laplacian  4: quad  f: features  o: ref  p: detect  n: pano+  m: stitch  h: HDR"
-    (help_w, help_h), help_baseline = cv2.getTextSize(
-        help_text, cv2.FONT_HERSHEY_PLAIN, 1.0, 1
-    )
+    """Draw keyboard shortcuts legend at bottom left (two lines)."""
+    line1 = "Esc: quit  c: capture  v: record  +/-: zoom  e: extract  r/R: rotate  t/T: thresh  b: blur  s: sharp  i: inset"
+    line2 = "g+x/y: sobel  d: canny  l: laplacian  4: quad  f: features  o: ref  p: detect  n: pano+  m: stitch  h: HDR"
+    font = cv2.FONT_HERSHEY_PLAIN
+    scale = 1.0
+    thickness = 1
+    (w1, h1), baseline = cv2.getTextSize(line1, font, scale, thickness)
+    (w2, _), _ = cv2.getTextSize(line2, font, scale, thickness)
     help_pad = 5
+    line_gap = 4
+    box_w = max(w1, w2) + 2 * help_pad
+    box_h = 2 * h1 + line_gap + 2 * help_pad
     disp_h = display.shape[0]
     overlay = display.copy()
     cv2.rectangle(
         overlay,
-        (help_pad, disp_h - help_h - 2 * help_pad),
-        (help_w + 2 * help_pad, disp_h - help_pad),
+        (help_pad, disp_h - box_h),
+        (help_pad + box_w, disp_h - help_pad),
         (0, 0, 0),
         -1,
     )
     cv2.addWeighted(overlay, 0.4, display, 0.6, 0, display)
-    cv2.putText(
-        display,
-        help_text,
-        (help_pad + 5, disp_h - help_pad - help_baseline),
-        cv2.FONT_HERSHEY_PLAIN,
-        1.0,
-        (230, 230, 230),
-        1,
-    )
+    y1 = disp_h - help_pad - h1 - line_gap - h1 + h1 - baseline
+    y2 = disp_h - help_pad - baseline
+    cv2.putText(display, line1, (help_pad + 5, y1), font, scale, (230, 230, 230), thickness)
+    cv2.putText(display, line2, (help_pad + 5, y2), font, scale, (230, 230, 230), thickness)
 
 
 def main():
@@ -108,7 +109,7 @@ def main():
 
         # Draw timestamp and copy ROI to top right
         roi_bounds = lab1.draw_timestamp(display, include_seconds=True)
-        roi_h = lab2.copy_timestamp_roi(display, roi_bounds)
+        roi_h = lab2.copy_timestamp_roi(display, roi_bounds, state["roi_copy_enabled"])
 
         # Draw overlays
         lab2.draw_overlays(

@@ -13,7 +13,7 @@ GAMMA_NORMAL = 1.0
 GAMMA_OVER = 0.2
 
 THUMBNAIL_SCALE = 0.15
-HELP_BAR_HEIGHT = 25
+HELP_BAR_HEIGHT = 45
 WATERMARK_TEXT = "HDR"
 
 
@@ -36,9 +36,14 @@ def align_exposures(images):
     return images
 
 
-def fuse_mertens(images):
+CONTRAST_WEIGHT = 1.0
+SATURATION_WEIGHT = 1.0
+EXPOSURE_WEIGHT = 1.0
+
+
+def fuse_mertens(images, cw=CONTRAST_WEIGHT, sw=SATURATION_WEIGHT, ew=EXPOSURE_WEIGHT):
     """Combine aligned exposures via Mertens exposure fusion."""
-    merger = cv2.createMergeMertens()
+    merger = cv2.createMergeMertens(cw, sw, ew)
     fusion = merger.process(images)
     return np.clip(fusion * 255, 0, 255).astype(np.uint8)
 
@@ -191,14 +196,49 @@ def apply_effects(img, state):
     return fused
 
 
+WEIGHT_SWEEP = [
+    (1.0, 1.0, 0.0),
+    (1.0, 1.0, 0.5),
+    (1.0, 1.0, 1.0),
+    (1.0, 0.0, 1.0),
+    (0.0, 1.0, 1.0),
+    (1.0, 1.0, 2.0),
+]
+
+
+CROP_Y = 0
+CROP_H = 600
+CROP_X = 400
+CROP_W = 800
+
+
+def run_weight_sweep(images):
+    """Fuse with several weight combinations and display a 1:1 crop comparison grid."""
+    cols = 3
+    rows = (len(WEIGHT_SWEEP) + cols - 1) // cols
+
+    grid = np.zeros((rows * CROP_H, cols * CROP_W, 3), dtype=np.uint8)
+
+    for idx, (cw, sw, ew) in enumerate(WEIGHT_SWEEP):
+        fused = fuse_mertens(images, cw, sw, ew)
+        crop = fused[CROP_Y : CROP_Y + CROP_H, CROP_X : CROP_X + CROP_W]
+        label = f"cw={cw} sw={sw} ew={ew}"
+        cv2.putText(crop, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        r, c = divmod(idx, cols)
+        grid[r * CROP_H : (r + 1) * CROP_H, c * CROP_W : (c + 1) * CROP_W] = crop
+
+    return grid
+
+
 if __name__ == "__main__":
     bracket = load_exposure_bracket(BRACKET_PATHS)
     aligned = align_exposures(bracket)
-    result = fuse_mertens(aligned)
 
+    result = fuse_mertens(aligned)
     cv2.imwrite(HDR_OUTPUT_PATH, result)
     print(f"Saved {HDR_OUTPUT_PATH}")
 
-    cv2.imshow("HDR - Mertens Fusion", result)
+    grid = run_weight_sweep(aligned)
+    cv2.imshow("Mertens Weight Sweep", grid)
     cv2.waitKey(0)
     cv2.destroyAllWindows()

@@ -50,6 +50,7 @@ def init_state():
         "sharpen_enabled": False,
         "sharpen_amount": SHARPEN_AMOUNT_MIN,
         "flash_start_time": None,
+        "roi_copy_enabled": False,
     }
 
 
@@ -189,11 +190,14 @@ def apply_border(img):
     )
 
 
-def copy_timestamp_roi(display, roi_bounds):
+def copy_timestamp_roi(display, roi_bounds, enabled=True):
     """Copy timestamp ROI to the top right corner. Returns roi_h for overlay positioning."""
     roi_y1, roi_y2, roi_x1, roi_x2 = roi_bounds
+    roi_h = roi_y2 - roi_y1
+    if not enabled:
+        return roi_h
     timestamp_roi = display[roi_y1:roi_y2, roi_x1:roi_x2].copy()
-    roi_h, roi_w = timestamp_roi.shape[:2]
+    roi_w = timestamp_roi.shape[1]
     display[0:roi_h, display.shape[1] - roi_w : display.shape[1]] = timestamp_roi
     return roi_h
 
@@ -306,6 +310,11 @@ def handle_key(key, state):
             print(f"Sharpen: enabled (amount={state['sharpen_amount'] / 10.0:.1f})")
         else:
             print("Sharpen: disabled")
+        return True
+
+    elif key == ord("i"):
+        state["roi_copy_enabled"] = not state["roi_copy_enabled"]
+        print(f"ROI copy: {'enabled' if state['roi_copy_enabled'] else 'disabled'}")
         return True
 
     return False
