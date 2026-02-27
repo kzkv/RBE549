@@ -1,6 +1,9 @@
 # Tom Kazakov
 # RBE 549 Week 7 Assignment:  Coin detection, recognition, and tallying
 
+import pickle
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -29,11 +32,20 @@ RADIUS_TOLERANCE = 0.25
 
 CAMERA_INDEX = 0
 WINDOW_NAME = "VisionCoin"
+DATABASE_PATH = Path("VisionCoin.pkl")
 
 CIRCLE_COLOR = (0, 255, 0)
 CENTER_COLOR = (0, 0, 255)
 CIRCLE_THICKNESS = 2
 CENTER_RADIUS = 3
+
+PERSISTED_KEYS = [
+    "hough_param1",
+    "hough_param2",
+    "hough_min_radius",
+    "hough_max_radius",
+    "scale_factor",
+]
 
 
 def create_state():
@@ -46,6 +58,21 @@ def create_state():
         "hough_min_radius": DEFAULT_MIN_RADIUS,
         "hough_max_radius": DEFAULT_MAX_RADIUS,
     }
+
+
+def save_database(state):
+    """Persist calibration and learned data to disk."""
+    data = {k: state[k] for k in PERSISTED_KEYS if k in state}
+    with open(DATABASE_PATH, "wb") as f:
+        pickle.dump(data, f)
+
+
+def load_database():
+    """Load persisted data if available."""
+    if not DATABASE_PATH.exists():
+        return {}
+    with open(DATABASE_PATH, "rb") as f:
+        return pickle.load(f)
 
 
 def adaptive_radius_bounds(scale_factor):
@@ -61,6 +88,7 @@ def setup_trackbars(window_name, state):
     def make_callback(key):
         def callback(val):
             state[key] = val
+            save_database(state)
 
         return callback
 
@@ -84,6 +112,12 @@ def setup_trackbars(window_name, state):
         500,
         make_callback("hough_max_radius"),
     )
+
+
+def remove_trackbars(window_name):
+    """Destroy and recreate the window to remove trackbars."""
+    cv2.destroyWindow(window_name)
+    cv2.namedWindow(window_name)
 
 
 def detect_coins(frame, state):
@@ -154,6 +188,20 @@ def draw_overlay(frame, state, circles):
         )
 
 
+def handle_key(key, state):
+    """Process keyboard input, return True if app should quit."""
+    if key == 27:
+        return True
+    if key == ord("t"):
+        if state["mode"] == "tune":
+            state["mode"] = "detect"
+            remove_trackbars(WINDOW_NAME)
+        else:
+            state["mode"] = "tune"
+            setup_trackbars(WINDOW_NAME, state)
+    return False
+
+
 def main():
     cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():
@@ -161,8 +209,10 @@ def main():
         return
 
     state = create_state()
+    persisted = load_database()
+    state.update(persisted)
+
     cv2.namedWindow(WINDOW_NAME)
-    setup_trackbars(WINDOW_NAME, state)
 
     while True:
         ret, frame = cap.read()
@@ -176,7 +226,7 @@ def main():
         cv2.imshow(WINDOW_NAME, frame)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
+        if handle_key(key, state):
             break
 
     cap.release()
