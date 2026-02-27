@@ -31,9 +31,9 @@ LARGEST_COIN_MM = max(s["diameter_mm"] for s in COIN_SPECS.values())
 
 # Hough detection defaults (pre-calibration)
 DEFAULT_MIN_RADIUS = 80
-DEFAULT_MAX_RADIUS = 200
-HOUGH_PARAM1 = 200
-HOUGH_PARAM2 = 30
+DEFAULT_MAX_RADIUS = 300
+HOUGH_PARAM1 = 290
+HOUGH_PARAM2 = 60
 HOUGH_MIN_DIST_FACTOR = 2.5
 MEDIAN_BLUR_K = 5
 
@@ -134,7 +134,7 @@ def setup_trackbars(window_name, state):
         "maxRadius",
         window_name,
         state["hough_max_radius"],
-        500,
+        300,
         make_callback("hough_max_radius"),
     )
 
