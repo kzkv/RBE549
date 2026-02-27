@@ -16,6 +16,16 @@ COIN_SPECS = {
     "dollar": {"diameter_mm": 26.50, "value": 1.00},
 }
 
+DENOMINATION_NAMES = list(COIN_SPECS.keys())
+
+DENOMINATION_KEYS = {
+    ord("1"): "penny",
+    ord("2"): "nickel",
+    ord("3"): "dime",
+    ord("4"): "quarter",
+    ord("5"): "dollar",
+}
+
 SMALLEST_COIN_MM = min(s["diameter_mm"] for s in COIN_SPECS.values())
 LARGEST_COIN_MM = max(s["diameter_mm"] for s in COIN_SPECS.values())
 
@@ -30,14 +40,22 @@ MEDIAN_BLUR_K = 5
 # Adaptive radius tolerance — fraction of expected radius added as margin
 RADIUS_TOLERANCE = 0.25
 
+# Size classification tolerance in mm
+SIZE_TOLERANCE_MM = 2.0
+
 CAMERA_INDEX = 0
 WINDOW_NAME = "VisionCoin"
 DATABASE_PATH = Path("VisionCoin.pkl")
 
 CIRCLE_COLOR = (0, 255, 0)
 CENTER_COLOR = (0, 0, 255)
+HIGHLIGHT_COLOR = (0, 255, 255)
+CROSSHAIR_COLOR = (0, 255, 255)
 CIRCLE_THICKNESS = 2
 CENTER_RADIUS = 3
+CROSSHAIR_SIZE = 40
+CROSSHAIR_GAP = 8
+CROSSHAIR_THICKNESS = 2
 
 PERSISTED_KEYS = [
     "hough_param1",
@@ -53,6 +71,7 @@ def create_state():
     return {
         "mode": "detect",
         "scale_factor": None,
+        "selected_denomination": None,
         "hough_param1": HOUGH_PARAM1,
         "hough_param2": HOUGH_PARAM2,
         "hough_min_radius": DEFAULT_MIN_RADIUS,
@@ -77,8 +96,8 @@ def load_database():
 
 def adaptive_radius_bounds(scale_factor):
     """Compute tight Hough radius bounds from calibration scale factor."""
-    min_r = int((SMALLEST_COIN_MM / 2) * scale_factor * (1 - RADIUS_TOLERANCE))
-    max_r = int((LARGEST_COIN_MM / 2) * scale_factor * (1 + RADIUS_TOLERANCE))
+    min_r = int((SMALLEST_COIN_MM / 2) / scale_factor * (1 - RADIUS_TOLERANCE))
+    max_r = int((LARGEST_COIN_MM / 2) / scale_factor * (1 + RADIUS_TOLERANCE))
     return max(1, min_r), max_r
 
 
@@ -151,11 +170,96 @@ def detect_coins(frame, state):
     return np.round(circles[0]).astype(int).tolist()
 
 
-def draw_circles(frame, circles):
-    """Draw detected circles on frame."""
+def calibrate(pixel_radius, denomination):
+    """Compute mm-per-pixel scale factor from a known coin."""
+    diameter_mm = COIN_SPECS[denomination]["diameter_mm"]
+    return diameter_mm / (2 * pixel_radius)
+
+
+def expected_radii(scale_factor):
+    """Compute expected pixel radius for each denomination."""
+    return {
+        name: (spec["diameter_mm"] / 2) / scale_factor
+        for name, spec in COIN_SPECS.items()
+    }
+
+
+def classify_by_size(circles, scale_factor):
+    """Classify each circle by closest denomination based on radius."""
+    labels = []
     for x, y, r in circles:
+        diameter_mm = 2 * r * scale_factor
+        best_name = None
+        best_dist = float("inf")
+        for name, spec in COIN_SPECS.items():
+            dist = abs(diameter_mm - spec["diameter_mm"])
+            if dist < best_dist:
+                best_dist = dist
+                best_name = name
+        if best_dist > SIZE_TOLERANCE_MM:
+            best_name = None
+        labels.append(best_name)
+    return labels
+
+
+def nearest_to_center(circles, frame_w, frame_h):
+    """Return index of the circle closest to frame center."""
+    cx, cy = frame_w // 2, frame_h // 2
+    best_idx = 0
+    best_dist = float("inf")
+    for i, (x, y, r) in enumerate(circles):
+        dist = (x - cx) ** 2 + (y - cy) ** 2
+        if dist < best_dist:
+            best_dist = dist
+            best_idx = i
+    return best_idx
+
+
+def draw_crosshairs(frame):
+    """Draw crosshairs at frame center with a gap for precise alignment."""
+    h, w = frame.shape[:2]
+    cx, cy = w // 2, h // 2
+    cv2.line(frame, (cx - CROSSHAIR_SIZE, cy), (cx - CROSSHAIR_GAP, cy),
+             CROSSHAIR_COLOR, CROSSHAIR_THICKNESS)
+    cv2.line(frame, (cx + CROSSHAIR_GAP, cy), (cx + CROSSHAIR_SIZE, cy),
+             CROSSHAIR_COLOR, CROSSHAIR_THICKNESS)
+    cv2.line(frame, (cx, cy - CROSSHAIR_SIZE), (cx, cy - CROSSHAIR_GAP),
+             CROSSHAIR_COLOR, CROSSHAIR_THICKNESS)
+    cv2.line(frame, (cx, cy + CROSSHAIR_GAP), (cx, cy + CROSSHAIR_SIZE),
+             CROSSHAIR_COLOR, CROSSHAIR_THICKNESS)
+
+
+def draw_circles(frame, circles, labels=None):
+    """Draw detected circles on frame with optional denomination labels."""
+    for i, (x, y, r) in enumerate(circles):
         cv2.circle(frame, (x, y), r, CIRCLE_COLOR, CIRCLE_THICKNESS)
         cv2.circle(frame, (x, y), CENTER_RADIUS, CENTER_COLOR, -1)
+        if labels and labels[i]:
+            label = f"{labels[i]} ${COIN_SPECS[labels[i]]['value']:.2f}"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+            cv2.putText(frame, label, (x - tw // 2, y + r // 2 + th // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+
+def draw_calibration(frame, state, circles):
+    """Draw calibration-specific UI elements."""
+    draw_crosshairs(frame)
+
+    denom = state["selected_denomination"]
+    if denom:
+        spec = COIN_SPECS[denom]
+        prompt = f"Place {denom} (${spec['value']:.2f}) at crosshairs, press Space"
+    else:
+        prompt = "Select coin: 1=penny 2=nickel 3=dime 4=quarter 5=dollar"
+
+    cv2.putText(frame, prompt, (10, frame.shape[0] - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+    if denom and circles:
+        h, w = frame.shape[:2]
+        idx = nearest_to_center(circles, w, h)
+        x, y, r = circles[idx]
+        cv2.circle(frame, (x, y), r, HIGHLIGHT_COLOR, 3)
 
 
 def draw_overlay(frame, state, circles):
@@ -192,6 +296,7 @@ def handle_key(key, state):
     """Process keyboard input, return True if app should quit."""
     if key == 27:
         return True
+
     if key == ord("t"):
         if state["mode"] == "tune":
             state["mode"] = "detect"
@@ -199,7 +304,37 @@ def handle_key(key, state):
         else:
             state["mode"] = "tune"
             setup_trackbars(WINDOW_NAME, state)
+        return False
+
+    if key == ord("c"):
+        state["mode"] = "calibrate"
+        state["selected_denomination"] = None
+        state["scale_factor"] = None
+        return False
+
+    if key in DENOMINATION_KEYS and state["mode"] == "calibrate":
+        state["selected_denomination"] = DENOMINATION_KEYS[key]
+        return False
+
+    if key == ord(" "):
+        state["capture_requested"] = True
+        return False
+
     return False
+
+
+def process_calibration(state, circles, frame_shape):
+    """Execute calibration capture when requested."""
+    denom = state["selected_denomination"]
+    if not (denom and circles):
+        return
+    h, w = frame_shape[:2]
+    idx = nearest_to_center(circles, w, h)
+    pixel_radius = circles[idx][2]
+    state["scale_factor"] = calibrate(pixel_radius, denom)
+    state["selected_denomination"] = None
+    state["mode"] = "detect"
+    save_database(state)
 
 
 def main():
@@ -220,7 +355,16 @@ def main():
             break
 
         circles = detect_coins(frame, state)
-        draw_circles(frame, circles)
+
+        labels = None
+        if state["scale_factor"] is not None and state["mode"] != "calibrate":
+            labels = classify_by_size(circles, state["scale_factor"])
+
+        draw_circles(frame, circles, labels)
+
+        if state["mode"] == "calibrate":
+            draw_calibration(frame, state, circles)
+
         draw_overlay(frame, state, circles)
 
         cv2.imshow(WINDOW_NAME, frame)
@@ -228,6 +372,11 @@ def main():
         key = cv2.waitKey(1) & 0xFF
         if handle_key(key, state):
             break
+
+        if state.get("capture_requested"):
+            state["capture_requested"] = False
+            if state["mode"] == "calibrate":
+                process_calibration(state, circles, frame.shape)
 
     cap.release()
     cv2.destroyAllWindows()
