@@ -30,18 +30,24 @@ SMALLEST_COIN_MM = min(s["diameter_mm"] for s in COIN_SPECS.values())
 LARGEST_COIN_MM = max(s["diameter_mm"] for s in COIN_SPECS.values())
 
 # Hough detection defaults (pre-calibration)
-DEFAULT_MIN_RADIUS = 20
+DEFAULT_MIN_RADIUS = 80
 DEFAULT_MAX_RADIUS = 200
-HOUGH_PARAM1 = 100
-HOUGH_PARAM2 = 40
+HOUGH_PARAM1 = 200
+HOUGH_PARAM2 = 30
 HOUGH_MIN_DIST_FACTOR = 2.5
 MEDIAN_BLUR_K = 5
 
 # Adaptive radius tolerance — fraction of expected radius added as margin
-RADIUS_TOLERANCE = 0.25
+RADIUS_TOLERANCE = 0.10
 
-# Size classification tolerance in mm
-SIZE_TOLERANCE_MM = 2.0
+# Half the smallest diameter gap (penny–dime: 1.14mm) prevents classification overlap
+SIZE_TOLERANCE_MM = 1.0
+
+# Color classification — ROI mask shrink and HSV thresholds
+ROI_SHRINK = 0.80
+SATURATION_THRESHOLD = 40
+COPPER_HUE_RANGE = (5, 20)
+GOLD_HUE_RANGE = (22, 40)
 
 CAMERA_INDEX = 0
 WINDOW_NAME = "VisionCoin"
@@ -202,6 +208,58 @@ def classify_by_size(circles, scale_factor):
     return labels
 
 
+def extract_coin_roi(frame, x, y, r):
+    """Extract circular ROI pixels from a coin, shrunk to avoid edge artifacts."""
+    h, w = frame.shape[:2]
+    inner_r = int(r * ROI_SHRINK)
+    x1, y1 = max(0, x - inner_r), max(0, y - inner_r)
+    x2, y2 = min(w, x + inner_r), min(h, y + inner_r)
+    crop = frame[y1:y2, x1:x2]
+    mask = np.zeros(crop.shape[:2], dtype=np.uint8)
+    cv2.circle(mask, (x - x1, y - y1), inner_r, 255, -1)
+    return crop, mask
+
+
+def classify_by_color(frame, circles):
+    """Classify coins by HSV color into copper, gold, or silver."""
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    labels = []
+    for x, y, r in circles:
+        crop, mask = extract_coin_roi(hsv, x, y, r)
+        mean_sat = cv2.mean(crop[:, :, 1], mask=mask)[0]
+        if mean_sat < SATURATION_THRESHOLD:
+            labels.append("silver")
+        else:
+            mean_hue = cv2.mean(crop[:, :, 0], mask=mask)[0]
+            if COPPER_HUE_RANGE[0] <= mean_hue <= COPPER_HUE_RANGE[1]:
+                labels.append("copper")
+            elif GOLD_HUE_RANGE[0] <= mean_hue <= GOLD_HUE_RANGE[1]:
+                labels.append("gold")
+            else:
+                labels.append("silver")
+    return labels
+
+
+def fuse_size_and_color(size_labels, color_labels):
+    """Combine size and color for known ambiguity pairs only."""
+    fused = []
+    for size_l, color_l in zip(size_labels, color_labels):
+        if size_l is None:
+            fused.append(None)
+        elif size_l in ("penny", "dime"):
+            if color_l == "copper":
+                fused.append("penny")
+            elif color_l == "silver":
+                fused.append("dime")
+            else:
+                fused.append(size_l)
+        elif size_l in ("nickel", "quarter") and color_l == "gold":
+            fused.append("dollar")
+        else:
+            fused.append(size_l)
+    return fused
+
+
 def nearest_to_center(circles, frame_w, frame_h):
     """Return index of the circle closest to frame center."""
     cx, cy = frame_w // 2, frame_h // 2
@@ -219,26 +277,69 @@ def draw_crosshairs(frame):
     """Draw crosshairs at frame center with a gap for precise alignment."""
     h, w = frame.shape[:2]
     cx, cy = w // 2, h // 2
-    cv2.line(frame, (cx - CROSSHAIR_SIZE, cy), (cx - CROSSHAIR_GAP, cy),
-             CROSSHAIR_COLOR, CROSSHAIR_THICKNESS)
-    cv2.line(frame, (cx + CROSSHAIR_GAP, cy), (cx + CROSSHAIR_SIZE, cy),
-             CROSSHAIR_COLOR, CROSSHAIR_THICKNESS)
-    cv2.line(frame, (cx, cy - CROSSHAIR_SIZE), (cx, cy - CROSSHAIR_GAP),
-             CROSSHAIR_COLOR, CROSSHAIR_THICKNESS)
-    cv2.line(frame, (cx, cy + CROSSHAIR_GAP), (cx, cy + CROSSHAIR_SIZE),
-             CROSSHAIR_COLOR, CROSSHAIR_THICKNESS)
+    cv2.line(
+        frame,
+        (cx - CROSSHAIR_SIZE, cy),
+        (cx - CROSSHAIR_GAP, cy),
+        CROSSHAIR_COLOR,
+        CROSSHAIR_THICKNESS,
+    )
+    cv2.line(
+        frame,
+        (cx + CROSSHAIR_GAP, cy),
+        (cx + CROSSHAIR_SIZE, cy),
+        CROSSHAIR_COLOR,
+        CROSSHAIR_THICKNESS,
+    )
+    cv2.line(
+        frame,
+        (cx, cy - CROSSHAIR_SIZE),
+        (cx, cy - CROSSHAIR_GAP),
+        CROSSHAIR_COLOR,
+        CROSSHAIR_THICKNESS,
+    )
+    cv2.line(
+        frame,
+        (cx, cy + CROSSHAIR_GAP),
+        (cx, cy + CROSSHAIR_SIZE),
+        CROSSHAIR_COLOR,
+        CROSSHAIR_THICKNESS,
+    )
 
 
-def draw_circles(frame, circles, labels=None):
-    """Draw detected circles on frame with optional denomination labels."""
+def _draw_centered_text(frame, text, x, y, scale, thickness):
+    """Draw horizontally centered text at the given position."""
+    (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+    cv2.putText(
+        frame,
+        text,
+        (x - tw // 2, y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        scale,
+        (255, 255, 255),
+        thickness,
+    )
+
+
+def draw_circles(frame, circles, coin_info=None):
+    """Draw detected circles on frame with diagnostic and denomination labels."""
     for i, (x, y, r) in enumerate(circles):
         cv2.circle(frame, (x, y), r, CIRCLE_COLOR, CIRCLE_THICKNESS)
         cv2.circle(frame, (x, y), CENTER_RADIUS, CENTER_COLOR, -1)
-        if labels and labels[i]:
-            label = f"{labels[i]} ${COIN_SPECS[labels[i]]['value']:.2f}"
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-            cv2.putText(frame, label, (x - tw // 2, y + r // 2 + th // 2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        if not coin_info:
+            continue
+        info = coin_info[i]
+        denom = info.get("label")
+        size_text = info.get("size_mm", "")
+        color_text = info.get("color", "")
+        if size_text:
+            _draw_centered_text(frame, size_text, x, y - r // 4, 0.4, 1)
+        if color_text:
+            _draw_centered_text(frame, color_text, x, y - r // 4 + 16, 0.4, 1)
+        if denom:
+            _draw_centered_text(frame, denom, x, y + r // 4, 0.5, 2)
+            value_text = f"${COIN_SPECS[denom]['value']:.2f}"
+            _draw_centered_text(frame, value_text, x, y + r // 4 + 18, 0.5, 2)
 
 
 def draw_calibration(frame, state, circles):
@@ -252,8 +353,15 @@ def draw_calibration(frame, state, circles):
     else:
         prompt = "Select coin: 1=penny 2=nickel 3=dime 4=quarter 5=dollar"
 
-    cv2.putText(frame, prompt, (10, frame.shape[0] - 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    cv2.putText(
+        frame,
+        prompt,
+        (10, frame.shape[0] - 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (0, 255, 255),
+        2,
+    )
 
     if denom and circles:
         h, w = frame.shape[:2]
@@ -292,6 +400,12 @@ def draw_overlay(frame, state, circles):
         )
 
 
+def _leave_tune_if_active(state):
+    """Remove trackbars when leaving tune mode."""
+    if state["mode"] == "tune":
+        remove_trackbars(WINDOW_NAME)
+
+
 def handle_key(key, state):
     """Process keyboard input, return True if app should quit."""
     if key == 27:
@@ -302,11 +416,13 @@ def handle_key(key, state):
             state["mode"] = "detect"
             remove_trackbars(WINDOW_NAME)
         else:
+            _leave_tune_if_active(state)
             state["mode"] = "tune"
             setup_trackbars(WINDOW_NAME, state)
         return False
 
     if key == ord("c"):
+        _leave_tune_if_active(state)
         state["mode"] = "calibrate"
         state["selected_denomination"] = None
         state["scale_factor"] = None
@@ -356,11 +472,23 @@ def main():
 
         circles = detect_coins(frame, state)
 
-        labels = None
-        if state["scale_factor"] is not None and state["mode"] != "calibrate":
-            labels = classify_by_size(circles, state["scale_factor"])
+        coin_info = None
+        if state["mode"] not in ("calibrate", "tune") and circles:
+            color_labels = classify_by_color(frame, circles)
+            size_labels = [None] * len(circles)
+            if state["scale_factor"] is not None:
+                size_labels = classify_by_size(circles, state["scale_factor"])
+                fused = fuse_size_and_color(size_labels, color_labels)
+            else:
+                fused = [None] * len(circles)
+            coin_info = []
+            for i, (x, y, r) in enumerate(circles):
+                info = {"label": fused[i], "color": color_labels[i]}
+                if state["scale_factor"] is not None:
+                    info["size_mm"] = f"{2 * r * state['scale_factor']:.1f}mm"
+                coin_info.append(info)
 
-        draw_circles(frame, circles, labels)
+        draw_circles(frame, circles, coin_info)
 
         if state["mode"] == "calibrate":
             draw_calibration(frame, state, circles)
