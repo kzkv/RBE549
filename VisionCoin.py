@@ -46,9 +46,9 @@ SIZE_TOLERANCE_MM = 1.0
 
 # Color classification — ROI mask shrink and HSV thresholds
 ROI_SHRINK = 0.80
-SATURATION_THRESHOLD = 40
-COPPER_HUE_RANGE = (5, 20)
-GOLD_HUE_RANGE = (22, 40)
+SATURATION_THRESHOLD = 50
+COPPER_HUE_RANGE = (10, 18)
+GOLD_HUE_RANGE = (19, 26)
 
 # Temporal smoothing
 WINDOW_SIZE = 15
@@ -82,7 +82,7 @@ PERSISTED_KEYS = [
 def create_state():
     """Return initial application state."""
     return {
-        "mode": "detect",
+        "mode": "tally",
         "scale_factor": None,
         "selected_denomination": None,
         "hough_param1": HOUGH_PARAM1,
@@ -228,27 +228,27 @@ def extract_coin_roi(frame, x, y, r):
 
 
 def classify_by_color(frame, circles):
-    """Classify coins by HSV color into copper, gold, or silver."""
+    """Classify coins by HSV color, returning labels and raw diagnostics."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    labels = []
+    results = []
     for x, y, r in circles:
         crop, mask = extract_coin_roi(hsv, x, y, r)
+        mean_hue = cv2.mean(crop[:, :, 0], mask=mask)[0]
         mean_sat = cv2.mean(crop[:, :, 1], mask=mask)[0]
         if mean_sat < SATURATION_THRESHOLD:
-            labels.append("silver")
+            label = "silver"
+        elif COPPER_HUE_RANGE[0] <= mean_hue <= COPPER_HUE_RANGE[1]:
+            label = "copper"
+        elif GOLD_HUE_RANGE[0] <= mean_hue <= GOLD_HUE_RANGE[1]:
+            label = "gold"
         else:
-            mean_hue = cv2.mean(crop[:, :, 0], mask=mask)[0]
-            if COPPER_HUE_RANGE[0] <= mean_hue <= COPPER_HUE_RANGE[1]:
-                labels.append("copper")
-            elif GOLD_HUE_RANGE[0] <= mean_hue <= GOLD_HUE_RANGE[1]:
-                labels.append("gold")
-            else:
-                labels.append("silver")
-    return labels
+            label = "silver"
+        results.append({"label": label, "hue": mean_hue, "sat": mean_sat})
+    return results
 
 
 def fuse_size_and_color(size_labels, color_labels):
-    """Combine size and color for known ambiguity pairs only."""
+    """Combine size and color — color only resolves the penny/dime ambiguity."""
     fused = []
     for size_l, color_l in zip(size_labels, color_labels):
         if size_l is None:
@@ -260,8 +260,6 @@ def fuse_size_and_color(size_labels, color_labels):
                 fused.append("dime")
             else:
                 fused.append(size_l)
-        elif size_l in ("nickel", "quarter") and color_l == "gold":
-            fused.append("dollar")
         else:
             fused.append(size_l)
     return fused
@@ -332,6 +330,7 @@ class CoinTracker:
                 "label": info.get("label"),
                 "color": info.get("color"),
                 "size_mm": info.get("size_mm"),
+                "hsv": info.get("hsv"),
             }
         )
 
@@ -351,6 +350,7 @@ class CoinTracker:
             labels = [o["label"] for o in obs if o["label"]]
             colors = [o["color"] for o in obs if o["color"]]
             sizes = [o["size_mm"] for o in obs if o["size_mm"]]
+            hsvs = [o["hsv"] for o in obs if o["hsv"]]
 
             info = {}
             if labels:
@@ -359,6 +359,8 @@ class CoinTracker:
                 info["color"] = Counter(colors).most_common(1)[0][0]
             if sizes:
                 info["size_mm"] = Counter(sizes).most_common(1)[0][0]
+            if hsvs:
+                info["hsv"] = hsvs[-1]
             stable_info.append(info)
 
         return stable_circles, stable_info
@@ -416,9 +418,20 @@ def draw_crosshairs(frame):
     )
 
 
-def _draw_centered_text(frame, text, x, y, scale, thickness):
-    """Draw horizontally centered text at the given position."""
-    (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+def _draw_text_with_bg(frame, text, x, y, scale, thickness, alpha=0.5):
+    """Draw horizontally centered text with a translucent dark backing."""
+    (tw, th), baseline = cv2.getTextSize(
+        text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness
+    )
+    pad = 2
+    x1 = x - tw // 2 - pad
+    y1 = y - th - pad
+    x2 = x + tw // 2 + pad
+    y2 = y + baseline + pad
+    overlay = frame[max(0, y1) : y2, max(0, x1) : x2]
+    if overlay.size > 0:
+        dark = np.zeros_like(overlay)
+        cv2.addWeighted(overlay, 1 - alpha, dark, alpha, 0, overlay)
     cv2.putText(
         frame,
         text,
@@ -441,14 +454,20 @@ def draw_circles(frame, circles, coin_info=None):
         denom = info.get("label")
         size_text = info.get("size_mm", "")
         color_text = info.get("color", "")
+        hsv_text = info.get("hsv", "")
+        line_y = y - r // 3
         if size_text:
-            _draw_centered_text(frame, size_text, x, y - r // 4, 0.4, 1)
+            _draw_text_with_bg(frame, size_text, x, line_y, 0.4, 1)
+            line_y += 16
         if color_text:
-            _draw_centered_text(frame, color_text, x, y - r // 4 + 16, 0.4, 1)
+            _draw_text_with_bg(frame, color_text, x, line_y, 0.4, 1)
+            line_y += 16
+        if hsv_text:
+            _draw_text_with_bg(frame, hsv_text, x, line_y, 0.35, 1)
         if denom:
-            _draw_centered_text(frame, denom, x, y + r // 4, 0.5, 2)
+            _draw_text_with_bg(frame, denom, x, y + r // 4, 0.5, 2)
             value_text = f"${COIN_SPECS[denom]['value']:.2f}"
-            _draw_centered_text(frame, value_text, x, y + r // 4 + 18, 0.5, 2)
+            _draw_text_with_bg(frame, value_text, x, y + r // 4 + 20, 0.5, 2)
 
 
 def draw_calibration(frame, state, circles):
@@ -479,8 +498,34 @@ def draw_calibration(frame, state, circles):
         cv2.circle(frame, (x, y), r, HIGHLIGHT_COLOR, 3)
 
 
-def draw_overlay(frame, state, circles):
-    """Draw mode and detection count on frame."""
+def compute_tally(stable_info):
+    """Sum dollar values of all recognized coins."""
+    total = 0.0
+    for info in stable_info:
+        label = info.get("label")
+        if label and label in COIN_SPECS:
+            total += COIN_SPECS[label]["value"]
+    return total
+
+
+def _draw_overlay_bg(frame, line_count):
+    """Draw a translucent dark strip behind the overlay text area."""
+    h = 10 + line_count * 30
+    overlay = frame[0:h, 0 : frame.shape[1] // 3]
+    if overlay.size > 0:
+        dark = np.zeros_like(overlay)
+        cv2.addWeighted(overlay, 0.5, dark, 0.5, 0, overlay)
+
+
+def draw_overlay(frame, state, circles, stable_info=None):
+    """Draw mode, detection count, and tally on frame."""
+    lines = ["mode", "count", "cal"]
+    if state["scale_factor"] is not None:
+        lines.append("bounds")
+    if stable_info:
+        lines.append("tally")
+    _draw_overlay_bg(frame, len(lines))
+
     mode_text = f"Mode: {state['mode']}"
     count_text = f"Detected: {len(circles)}"
     cal_text = "Calibrated" if state["scale_factor"] else "Uncalibrated"
@@ -495,17 +540,32 @@ def draw_overlay(frame, state, circles):
         frame, cal_text, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2
     )
 
+    y_offset = 120
     if state["scale_factor"] is not None:
         min_r, max_r = adaptive_radius_bounds(state["scale_factor"])
         bounds_text = f"Radius bounds: {min_r}-{max_r}px"
         cv2.putText(
             frame,
             bounds_text,
-            (10, 120),
+            (10, y_offset),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
             (200, 200, 200),
             1,
+        )
+        y_offset += 30
+
+    if stable_info:
+        total = compute_tally(stable_info)
+        tally_text = f"Total: ${total:.2f}"
+        cv2.putText(
+            frame,
+            tally_text,
+            (10, y_offset),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 0),
+            2,
         )
 
 
@@ -522,7 +582,7 @@ def handle_key(key, state):
 
     if key == ord("t"):
         if state["mode"] == "tune":
-            state["mode"] = "detect"
+            state["mode"] = "tally"
             remove_trackbars(WINDOW_NAME)
         else:
             _leave_tune_if_active(state)
@@ -558,7 +618,7 @@ def process_calibration(state, circles, frame_shape):
     pixel_radius = circles[idx][2]
     state["scale_factor"] = calibrate(pixel_radius, denom)
     state["selected_denomination"] = None
-    state["mode"] = "detect"
+    state["mode"] = "tally"
     save_database(state)
 
 
@@ -584,7 +644,8 @@ def main():
 
         coin_info = None
         if state["mode"] not in ("calibrate", "tune") and circles:
-            color_labels = classify_by_color(frame, circles)
+            color_results = classify_by_color(frame, circles)
+            color_labels = [r["label"] for r in color_results]
             if state["scale_factor"] is not None:
                 size_labels = classify_by_size(circles, state["scale_factor"])
                 fused = fuse_size_and_color(size_labels, color_labels)
@@ -592,11 +653,16 @@ def main():
                 fused = [None] * len(circles)
             coin_info = []
             for i, (x, y, r) in enumerate(circles):
-                info = {"label": fused[i], "color": color_labels[i]}
+                info = {
+                    "label": fused[i],
+                    "color": color_labels[i],
+                    "hsv": f"H:{color_results[i]['hue']:.0f} S:{color_results[i]['sat']:.0f}",
+                }
                 if state["scale_factor"] is not None:
                     info["size_mm"] = f"{2 * r * state['scale_factor']:.1f}mm"
                 coin_info.append(info)
 
+        display_info = None
         if state["mode"] in ("calibrate", "tune"):
             tracker.reset()
             draw_circles(frame, circles)
@@ -606,11 +672,12 @@ def main():
             stable_circles, stable_info = tracker.get_stable_coins()
             draw_circles(frame, stable_circles, stable_info or None)
             display_circles = stable_circles
+            display_info = stable_info
 
         if state["mode"] == "calibrate":
             draw_calibration(frame, state, circles)
 
-        draw_overlay(frame, state, display_circles)
+        draw_overlay(frame, state, display_circles, display_info)
 
         cv2.imshow(WINDOW_NAME, frame)
 
