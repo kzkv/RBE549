@@ -12,8 +12,8 @@ Each weekly assignment follows this sequence:
 
 4. **Briefer** — Explain the concept or algorithm being implemented. Cover the theory, the "why," and any subtleties relevant to this specific increment. Do not write code yet.
 5. **Wait for author** — Stop and let the author ask questions, push back, or request deeper explanation. Do not proceed until the author signals readiness.
-6. **Drafter** — Write the code for this increment. Minimal, verifiable. One function or one logical unit at a time.
-7. **Critic** — Analyze the increment: correctness, edge cases, whether it matches the Briefer's explanation, and anything report-worthy. Flag concerns.
+6. **Drafter** — Write the code for this increment. Minimal, verifiable. One function or one logical unit at a time. After writing, run `black` on the modified file before proceeding.
+7. **Critic** — Analyze the increment: correctness, edge cases, whether it matches the Briefer's explanation, and anything report-worthy. Flag concerns. Code must already be Black-formatted before this step.
 8. **Wait for author** — Stop and let the author review the code, run it, and verify. The student decides when to commit. Do not auto-commit or proceed to the next increment.
 9. **Iterate** — If the author requests changes, apply them and return to step 7 (Critic). Once the author commits, move to the next increment (step 4).
 

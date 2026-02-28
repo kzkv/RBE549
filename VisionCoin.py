@@ -2,6 +2,7 @@
 # RBE 549 Week 7 Assignment:  Coin detection, recognition, and tallying
 
 import pickle
+from collections import Counter, deque
 from pathlib import Path
 
 import cv2
@@ -48,6 +49,12 @@ ROI_SHRINK = 0.80
 SATURATION_THRESHOLD = 40
 COPPER_HUE_RANGE = (5, 20)
 GOLD_HUE_RANGE = (22, 40)
+
+# Temporal smoothing
+WINDOW_SIZE = 15
+MIN_OBSERVATIONS = 5
+MATCH_DISTANCE = 50
+EVICTION_FRAMES = 5
 
 CAMERA_INDEX = 0
 WINDOW_NAME = "VisionCoin"
@@ -260,6 +267,108 @@ def fuse_size_and_color(size_labels, color_labels):
     return fused
 
 
+class CoinTracker:
+    """Temporal smoothing via per-coin sliding windows."""
+
+    def __init__(self):
+        self._tracks = {}
+        self._next_id = 0
+        self._frame_count = 0
+
+    def update(self, circles, coin_info):
+        """Match detections to existing tracks, create/evict as needed."""
+        self._frame_count += 1
+        matched_ids = set()
+        unmatched = list(range(len(circles)))
+
+        for track_id, track in list(self._tracks.items()):
+            if not unmatched:
+                break
+            tx = int(np.median([o["x"] for o in track["observations"]]))
+            ty = int(np.median([o["y"] for o in track["observations"]]))
+            best_idx, best_dist = None, float("inf")
+            for idx in unmatched:
+                x, y, r = circles[idx]
+                dist = ((x - tx) ** 2 + (y - ty) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = idx
+            if best_dist < MATCH_DISTANCE:
+                self._add_observation(
+                    track, circles[best_idx], coin_info[best_idx] if coin_info else {}
+                )
+                track["last_seen"] = self._frame_count
+                matched_ids.add(track_id)
+                unmatched.remove(best_idx)
+
+        for idx in unmatched:
+            info = coin_info[idx] if coin_info else {}
+            self._create_track(circles[idx], info)
+
+        for track_id in list(self._tracks):
+            if (
+                track_id not in matched_ids
+                and self._frame_count - self._tracks[track_id]["last_seen"]
+                > EVICTION_FRAMES
+            ):
+                del self._tracks[track_id]
+
+    def _create_track(self, circle, info):
+        track = {
+            "observations": deque(maxlen=WINDOW_SIZE),
+            "last_seen": self._frame_count,
+        }
+        self._add_observation(track, circle, info)
+        self._tracks[self._next_id] = track
+        self._next_id += 1
+
+    def _add_observation(self, track, circle, info):
+        x, y, r = circle
+        track["observations"].append(
+            {
+                "x": x,
+                "y": y,
+                "r": r,
+                "label": info.get("label"),
+                "color": info.get("color"),
+                "size_mm": info.get("size_mm"),
+            }
+        )
+
+    def get_stable_coins(self):
+        """Return smoothed circles and info for tracks with enough observations."""
+        stable_circles = []
+        stable_info = []
+        for track in self._tracks.values():
+            obs = track["observations"]
+            if len(obs) < MIN_OBSERVATIONS:
+                continue
+            x = int(np.median([o["x"] for o in obs]))
+            y = int(np.median([o["y"] for o in obs]))
+            r = int(np.median([o["r"] for o in obs]))
+            stable_circles.append([x, y, r])
+
+            labels = [o["label"] for o in obs if o["label"]]
+            colors = [o["color"] for o in obs if o["color"]]
+            sizes = [o["size_mm"] for o in obs if o["size_mm"]]
+
+            info = {}
+            if labels:
+                info["label"] = Counter(labels).most_common(1)[0][0]
+            if colors:
+                info["color"] = Counter(colors).most_common(1)[0][0]
+            if sizes:
+                info["size_mm"] = Counter(sizes).most_common(1)[0][0]
+            stable_info.append(info)
+
+        return stable_circles, stable_info
+
+    def reset(self):
+        """Clear all tracks."""
+        self._tracks.clear()
+        self._next_id = 0
+
+
 def nearest_to_center(circles, frame_w, frame_h):
     """Return index of the circle closest to frame center."""
     cx, cy = frame_w // 2, frame_h // 2
@@ -462,6 +571,7 @@ def main():
     state = create_state()
     persisted = load_database()
     state.update(persisted)
+    tracker = CoinTracker()
 
     cv2.namedWindow(WINDOW_NAME)
 
@@ -475,7 +585,6 @@ def main():
         coin_info = None
         if state["mode"] not in ("calibrate", "tune") and circles:
             color_labels = classify_by_color(frame, circles)
-            size_labels = [None] * len(circles)
             if state["scale_factor"] is not None:
                 size_labels = classify_by_size(circles, state["scale_factor"])
                 fused = fuse_size_and_color(size_labels, color_labels)
@@ -488,12 +597,20 @@ def main():
                     info["size_mm"] = f"{2 * r * state['scale_factor']:.1f}mm"
                 coin_info.append(info)
 
-        draw_circles(frame, circles, coin_info)
+        if state["mode"] in ("calibrate", "tune"):
+            tracker.reset()
+            draw_circles(frame, circles)
+            display_circles = circles
+        else:
+            tracker.update(circles, coin_info or [])
+            stable_circles, stable_info = tracker.get_stable_coins()
+            draw_circles(frame, stable_circles, stable_info or None)
+            display_circles = stable_circles
 
         if state["mode"] == "calibrate":
             draw_calibration(frame, state, circles)
 
-        draw_overlay(frame, state, circles)
+        draw_overlay(frame, state, display_circles)
 
         cv2.imshow(WINDOW_NAME, frame)
 
