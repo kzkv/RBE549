@@ -56,9 +56,18 @@ MIN_OBSERVATIONS = 5
 MATCH_DISTANCE = 50
 EVICTION_FRAMES = 5
 
+# SIFT/FLANN feature matching
+FLANN_INDEX_KDTREE = 1
+FLANN_TREES = 5
+FLANN_CHECKS = 100
+RATIO_THRESHOLD = 0.75
+MIN_GOOD_MATCHES = 5
+SIFT_FRAME_INTERVAL = 10
+
 CAMERA_INDEX = 0
 WINDOW_NAME = "VisionCoin"
 DATABASE_PATH = Path("VisionCoin.pkl")
+FEATURES_PATH = Path("VisionCoin_features.pkl")
 
 CIRCLE_COLOR = (0, 255, 0)
 CENTER_COLOR = (0, 0, 255)
@@ -265,6 +274,108 @@ def fuse_size_and_color(size_labels, color_labels):
     return fused
 
 
+def save_features(feature_db):
+    """Persist learned feature database to disk."""
+    with open(FEATURES_PATH, "wb") as f:
+        pickle.dump(feature_db, f)
+
+
+def load_features():
+    """Load learned feature database if available."""
+    if not FEATURES_PATH.exists():
+        return {}
+    with open(FEATURES_PATH, "rb") as f:
+        return pickle.load(f)
+
+
+def extract_full_roi(frame, x, y, r):
+    """Extract circular ROI at full detected radius for feature extraction."""
+    h, w = frame.shape[:2]
+    x1, y1 = max(0, x - r), max(0, y - r)
+    x2, y2 = min(w, x + r), min(h, y + r)
+    crop = frame[y1:y2, x1:x2]
+    mask = np.zeros(crop.shape[:2], dtype=np.uint8)
+    cv2.circle(mask, (x - x1, y - y1), r, 255, -1)
+    return crop, mask
+
+
+SIFT = cv2.SIFT_create()
+
+
+def extract_features(frame, x, y, r):
+    """Extract SIFT keypoints and descriptors from a circular coin ROI."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+    crop, mask = extract_full_roi(gray, x, y, r)
+    kp, des = SIFT.detectAndCompute(crop, mask)
+    return kp, des
+
+
+def learn_coins(frame, circles, denomination, feature_db):
+    """Learn SIFT features from all detected coins."""
+    if denomination not in feature_db:
+        feature_db[denomination] = []
+    learned = 0
+    for x, y, r in circles:
+        kp, des = extract_features(frame, x, y, r)
+        if des is not None and len(des) > 0:
+            feature_db[denomination].append(des)
+            learned += 1
+    if learned > 0:
+        save_features(feature_db)
+    return learned
+
+
+def classify_by_features(frame, circles, feature_db):
+    """Classify coins by SIFT/FLANN matching against learned features."""
+    if not feature_db:
+        return [None] * len(circles), []
+
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=FLANN_TREES)
+    search_params = dict(checks=FLANN_CHECKS)
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
+
+    labels = []
+    all_keypoints = []
+    for x, y, r in circles:
+        kp, des = extract_features(frame, x, y, r)
+        all_keypoints.append((kp, x, y, r))
+        if des is None or len(des) < 2:
+            labels.append(None)
+            continue
+        best_name, best_count = None, 0
+        for name, samples in feature_db.items():
+            total_good = 0
+            for sample in samples:
+                stored_des = sample["des"] if isinstance(sample, dict) else sample
+                if stored_des is None or len(stored_des) < 2:
+                    continue
+                matches = flann.knnMatch(des, stored_des, k=2)
+                good = [
+                    m for m, n in matches if m.distance < RATIO_THRESHOLD * n.distance
+                ]
+                total_good += len(good)
+            if total_good > best_count:
+                best_count = total_good
+                best_name = name
+        if best_count >= MIN_GOOD_MATCHES:
+            labels.append(best_name)
+        else:
+            labels.append(None)
+    return labels, all_keypoints
+
+
+def draw_keypoints_on_frame(frame, all_keypoints):
+    """Draw SIFT keypoint markers on the main frame."""
+    for kp, cx, cy, r in all_keypoints:
+        if kp is None:
+            continue
+        ox, oy = cx - r, cy - r
+        for pt in kp:
+            px = int(pt.pt[0] + ox)
+            py = int(pt.pt[1] + oy)
+            cv2.circle(frame, (px, py), 2, (255, 0, 255), -1)
+
+
 class CoinTracker:
     """Temporal smoothing via per-coin sliding windows."""
 
@@ -331,6 +442,7 @@ class CoinTracker:
                 "color": info.get("color"),
                 "size_mm": info.get("size_mm"),
                 "hsv": info.get("hsv"),
+                "sift": info.get("sift"),
             }
         )
 
@@ -351,6 +463,7 @@ class CoinTracker:
             colors = [o["color"] for o in obs if o["color"]]
             sizes = [o["size_mm"] for o in obs if o["size_mm"]]
             hsvs = [o["hsv"] for o in obs if o["hsv"]]
+            sifts = [o["sift"] for o in obs if o["sift"]]
 
             info = {}
             if labels:
@@ -361,6 +474,8 @@ class CoinTracker:
                 info["size_mm"] = Counter(sizes).most_common(1)[0][0]
             if hsvs:
                 info["hsv"] = hsvs[-1]
+            if sifts:
+                info["sift"] = Counter(sifts).most_common(1)[0][0]
             stable_info.append(info)
 
         return stable_circles, stable_info
@@ -455,6 +570,7 @@ def draw_circles(frame, circles, coin_info=None):
         size_text = info.get("size_mm", "")
         color_text = info.get("color", "")
         hsv_text = info.get("hsv", "")
+        sift_text = info.get("sift", "")
         line_y = y - r // 3
         if size_text:
             _draw_text_with_bg(frame, size_text, x, line_y, 0.4, 1)
@@ -464,6 +580,9 @@ def draw_circles(frame, circles, coin_info=None):
             line_y += 16
         if hsv_text:
             _draw_text_with_bg(frame, hsv_text, x, line_y, 0.35, 1)
+            line_y += 14
+        if sift_text:
+            _draw_text_with_bg(frame, f"sift:{sift_text}", x, line_y, 0.35, 1)
         if denom:
             _draw_text_with_bg(frame, denom, x, y + r // 4, 0.5, 2)
             value_text = f"${COIN_SPECS[denom]['value']:.2f}"
@@ -496,6 +615,47 @@ def draw_calibration(frame, state, circles):
         idx = nearest_to_center(circles, w, h)
         x, y, r = circles[idx]
         cv2.circle(frame, (x, y), r, HIGHLIGHT_COLOR, 3)
+
+
+def draw_learning(frame, state, circles, feature_db):
+    """Draw learning mode UI elements."""
+    denom = state["selected_denomination"]
+    sample_counts = {name: len(samples) for name, samples in feature_db.items()}
+    counts_text = (
+        "  ".join(f"{n}:{c}" for n, c in sample_counts.items())
+        if sample_counts
+        else "empty"
+    )
+
+    if denom:
+        prompt = (
+            f"Place {denom}s in view, press Space to learn ({len(circles)} detected)"
+        )
+    else:
+        prompt = "Select coin: 1=penny 2=nickel 3=dime 4=quarter 5=dollar"
+
+    cv2.putText(
+        frame,
+        prompt,
+        (10, frame.shape[0] - 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (0, 255, 255),
+        2,
+    )
+    cv2.putText(
+        frame,
+        f"Learned: {counts_text}",
+        (10, frame.shape[0] - 15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (200, 200, 200),
+        1,
+    )
+
+    if denom and circles:
+        for x, y, r in circles:
+            cv2.circle(frame, (x, y), r, HIGHLIGHT_COLOR, 3)
 
 
 def compute_tally(stable_info):
@@ -597,7 +757,28 @@ def handle_key(key, state):
         state["scale_factor"] = None
         return False
 
-    if key in DENOMINATION_KEYS and state["mode"] == "calibrate":
+    if key == ord("l"):
+        if state["mode"] == "learn":
+            state["mode"] = "tally"
+            state["selected_denomination"] = None
+        else:
+            _leave_tune_if_active(state)
+            state["mode"] = "learn"
+            state["selected_denomination"] = None
+        return False
+
+    if key == ord("f"):
+        if state["mode"] == "sift":
+            state["mode"] = "tally"
+        else:
+            _leave_tune_if_active(state)
+            state["mode"] = "sift"
+            state["sift_frame_counter"] = 0
+            state["sift_cache"] = None
+            state["sift_keypoints_cache"] = []
+        return False
+
+    if key in DENOMINATION_KEYS and state["mode"] in ("calibrate", "learn"):
         state["selected_denomination"] = DENOMINATION_KEYS[key]
         return False
 
@@ -631,6 +812,7 @@ def main():
     state = create_state()
     persisted = load_database()
     state.update(persisted)
+    feature_db = load_features()
     tracker = CoinTracker()
 
     cv2.namedWindow(WINDOW_NAME)
@@ -643,7 +825,8 @@ def main():
         circles = detect_coins(frame, state)
 
         coin_info = None
-        if state["mode"] not in ("calibrate", "tune") and circles:
+        all_keypoints = []
+        if state["mode"] in ("tally", "sift") and circles:
             color_results = classify_by_color(frame, circles)
             color_labels = [r["label"] for r in color_results]
             if state["scale_factor"] is not None:
@@ -651,19 +834,33 @@ def main():
                 fused = fuse_size_and_color(size_labels, color_labels)
             else:
                 fused = [None] * len(circles)
+            feature_labels = [None] * len(circles)
+            if state["mode"] == "sift" and feature_db:
+                counter = state.get("sift_frame_counter", 0)
+                if counter % SIFT_FRAME_INTERVAL == 0:
+                    feature_labels, all_keypoints = classify_by_features(
+                        frame, circles, feature_db
+                    )
+                    state["sift_cache"] = feature_labels
+                    state["sift_keypoints_cache"] = all_keypoints
+                else:
+                    feature_labels = state.get("sift_cache") or [None] * len(circles)
+                    all_keypoints = state.get("sift_keypoints_cache") or []
+                state["sift_frame_counter"] = counter + 1
             coin_info = []
             for i, (x, y, r) in enumerate(circles):
                 info = {
                     "label": fused[i],
                     "color": color_labels[i],
                     "hsv": f"H:{color_results[i]['hue']:.0f} S:{color_results[i]['sat']:.0f}",
+                    "sift": feature_labels[i],
                 }
                 if state["scale_factor"] is not None:
                     info["size_mm"] = f"{2 * r * state['scale_factor']:.1f}mm"
                 coin_info.append(info)
 
         display_info = None
-        if state["mode"] in ("calibrate", "tune"):
+        if state["mode"] in ("calibrate", "tune", "learn"):
             tracker.reset()
             draw_circles(frame, circles)
             display_circles = circles
@@ -676,6 +873,10 @@ def main():
 
         if state["mode"] == "calibrate":
             draw_calibration(frame, state, circles)
+        elif state["mode"] == "learn":
+            draw_learning(frame, state, circles, feature_db)
+        elif state["mode"] == "sift" and all_keypoints:
+            draw_keypoints_on_frame(frame, all_keypoints)
 
         draw_overlay(frame, state, display_circles, display_info)
 
@@ -689,6 +890,11 @@ def main():
             state["capture_requested"] = False
             if state["mode"] == "calibrate":
                 process_calibration(state, circles, frame.shape)
+            elif state["mode"] == "learn":
+                denom = state["selected_denomination"]
+                if denom and circles:
+                    count = learn_coins(frame, circles, denom, feature_db)
+                    print(f"Learned {count} {denom} samples ({len(circles)} detected)")
 
     cap.release()
     cv2.destroyAllWindows()
