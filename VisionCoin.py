@@ -62,7 +62,7 @@ FLANN_TREES = 5
 FLANN_CHECKS = 100
 RATIO_THRESHOLD = 0.75
 MIN_GOOD_MATCHES = 5
-SIFT_FRAME_INTERVAL = 10
+SIFT_VOTE_WEIGHT = 3
 
 CAMERA_INDEX = 0
 WINDOW_NAME = "VisionCoin"
@@ -325,43 +325,31 @@ def learn_coins(frame, circles, denomination, feature_db):
     return learned
 
 
-def classify_by_features(frame, circles, feature_db):
-    """Classify coins by SIFT/FLANN matching against learned features."""
-    if not feature_db:
-        return [None] * len(circles), []
+def classify_single_coin(frame, x, y, r, feature_db):
+    """Run SIFT/FLANN for one coin, returning (label, keypoints)."""
+    kp, des = extract_features(frame, x, y, r)
+    if des is None or len(des) < 2:
+        return None, (kp, x, y, r)
 
     index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=FLANN_TREES)
     search_params = dict(checks=FLANN_CHECKS)
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
-    labels = []
-    all_keypoints = []
-    for x, y, r in circles:
-        kp, des = extract_features(frame, x, y, r)
-        all_keypoints.append((kp, x, y, r))
-        if des is None or len(des) < 2:
-            labels.append(None)
-            continue
-        best_name, best_count = None, 0
-        for name, samples in feature_db.items():
-            total_good = 0
-            for sample in samples:
-                stored_des = sample["des"] if isinstance(sample, dict) else sample
-                if stored_des is None or len(stored_des) < 2:
-                    continue
-                matches = flann.knnMatch(des, stored_des, k=2)
-                good = [
-                    m for m, n in matches if m.distance < RATIO_THRESHOLD * n.distance
-                ]
-                total_good += len(good)
-            if total_good > best_count:
-                best_count = total_good
-                best_name = name
-        if best_count >= MIN_GOOD_MATCHES:
-            labels.append(best_name)
-        else:
-            labels.append(None)
-    return labels, all_keypoints
+    best_name, best_count = None, 0
+    for name, samples in feature_db.items():
+        total_good = 0
+        for sample in samples:
+            stored_des = sample["des"] if isinstance(sample, dict) else sample
+            if stored_des is None or len(stored_des) < 2:
+                continue
+            matches = flann.knnMatch(des, stored_des, k=2)
+            good = [m for m, n in matches if m.distance < RATIO_THRESHOLD * n.distance]
+            total_good += len(good)
+        if total_good > best_count:
+            best_count = total_good
+            best_name = name
+    label = best_name if best_count >= MIN_GOOD_MATCHES else None
+    return label, (kp, x, y, r)
 
 
 def draw_keypoints_on_frame(frame, all_keypoints):
@@ -377,12 +365,13 @@ def draw_keypoints_on_frame(frame, all_keypoints):
 
 
 class CoinTracker:
-    """Temporal smoothing via per-coin sliding windows."""
+    """Temporal smoothing via per-coin sliding windows with SIFT queue."""
 
     def __init__(self):
         self._tracks = {}
         self._next_id = 0
         self._frame_count = 0
+        self._sift_queue = deque()
 
     def update(self, circles, coin_info):
         """Match detections to existing tracks, create/evict as needed."""
@@ -403,12 +392,16 @@ class CoinTracker:
                     best_dist = dist
                     best_idx = idx
             if best_dist < MATCH_DISTANCE:
+                prev_label = self._stable_label(track)
                 self._add_observation(
                     track, circles[best_idx], coin_info[best_idx] if coin_info else {}
                 )
                 track["last_seen"] = self._frame_count
                 matched_ids.add(track_id)
                 unmatched.remove(best_idx)
+                new_label = self._stable_label(track)
+                if new_label and new_label != prev_label:
+                    self._enqueue_sift(track_id)
 
         for idx in unmatched:
             info = coin_info[idx] if coin_info else {}
@@ -422,10 +415,48 @@ class CoinTracker:
             ):
                 del self._tracks[track_id]
 
+        self._sift_queue = deque(tid for tid in self._sift_queue if tid in self._tracks)
+
+    def _stable_label(self, track):
+        """Return majority-vote label if track has enough observations."""
+        obs = track["observations"]
+        if len(obs) < MIN_OBSERVATIONS:
+            return None
+        labels = [o["label"] for o in obs if o["label"]]
+        if not labels:
+            return None
+        return Counter(labels).most_common(1)[0][0]
+
+    def _enqueue_sift(self, track_id):
+        if track_id not in self._sift_queue:
+            self._sift_queue.append(track_id)
+
+    def pop_sift_target(self):
+        """Return (track_id, x, y, r) for the next coin needing SIFT, or None."""
+        while self._sift_queue:
+            track_id = self._sift_queue.popleft()
+            if track_id not in self._tracks:
+                continue
+            track = self._tracks[track_id]
+            obs = track["observations"]
+            x = int(np.median([o["x"] for o in obs]))
+            y = int(np.median([o["y"] for o in obs]))
+            r = int(np.median([o["r"] for o in obs]))
+            return track_id, x, y, r
+        return None
+
+    def set_sift_result(self, track_id, label, keypoints):
+        """Store SIFT classification result on a track."""
+        if track_id in self._tracks:
+            self._tracks[track_id]["sift_label"] = label
+            self._tracks[track_id]["sift_keypoints"] = keypoints
+
     def _create_track(self, circle, info):
         track = {
             "observations": deque(maxlen=WINDOW_SIZE),
             "last_seen": self._frame_count,
+            "sift_label": None,
+            "sift_keypoints": None,
         }
         self._add_observation(track, circle, info)
         self._tracks[self._next_id] = track
@@ -442,7 +473,6 @@ class CoinTracker:
                 "color": info.get("color"),
                 "size_mm": info.get("size_mm"),
                 "hsv": info.get("hsv"),
-                "sift": info.get("sift"),
             }
         )
 
@@ -463,7 +493,10 @@ class CoinTracker:
             colors = [o["color"] for o in obs if o["color"]]
             sizes = [o["size_mm"] for o in obs if o["size_mm"]]
             hsvs = [o["hsv"] for o in obs if o["hsv"]]
-            sifts = [o["sift"] for o in obs if o["sift"]]
+
+            sift_label = track.get("sift_label")
+            if sift_label:
+                labels.extend([sift_label] * SIFT_VOTE_WEIGHT)
 
             info = {}
             if labels:
@@ -474,16 +507,26 @@ class CoinTracker:
                 info["size_mm"] = Counter(sizes).most_common(1)[0][0]
             if hsvs:
                 info["hsv"] = hsvs[-1]
-            if sifts:
-                info["sift"] = Counter(sifts).most_common(1)[0][0]
+            if sift_label:
+                info["sift"] = sift_label
             stable_info.append(info)
 
         return stable_circles, stable_info
 
+    def get_all_sift_keypoints(self):
+        """Return cached SIFT keypoints from all tracks that have them."""
+        keypoints = []
+        for track in self._tracks.values():
+            kp_data = track.get("sift_keypoints")
+            if kp_data:
+                keypoints.append(kp_data)
+        return keypoints
+
     def reset(self):
-        """Clear all tracks."""
+        """Clear all tracks and SIFT queue."""
         self._tracks.clear()
         self._next_id = 0
+        self._sift_queue.clear()
 
 
 def nearest_to_center(circles, frame_w, frame_h):
@@ -773,9 +816,6 @@ def handle_key(key, state):
         else:
             _leave_tune_if_active(state)
             state["mode"] = "sift"
-            state["sift_frame_counter"] = 0
-            state["sift_cache"] = None
-            state["sift_keypoints_cache"] = []
         return False
 
     if key in DENOMINATION_KEYS and state["mode"] in ("calibrate", "learn"):
@@ -825,7 +865,6 @@ def main():
         circles = detect_coins(frame, state)
 
         coin_info = None
-        all_keypoints = []
         if state["mode"] in ("tally", "sift") and circles:
             color_results = classify_by_color(frame, circles)
             color_labels = [r["label"] for r in color_results]
@@ -834,26 +873,12 @@ def main():
                 fused = fuse_size_and_color(size_labels, color_labels)
             else:
                 fused = [None] * len(circles)
-            feature_labels = [None] * len(circles)
-            if state["mode"] == "sift" and feature_db:
-                counter = state.get("sift_frame_counter", 0)
-                if counter % SIFT_FRAME_INTERVAL == 0:
-                    feature_labels, all_keypoints = classify_by_features(
-                        frame, circles, feature_db
-                    )
-                    state["sift_cache"] = feature_labels
-                    state["sift_keypoints_cache"] = all_keypoints
-                else:
-                    feature_labels = state.get("sift_cache") or [None] * len(circles)
-                    all_keypoints = state.get("sift_keypoints_cache") or []
-                state["sift_frame_counter"] = counter + 1
             coin_info = []
             for i, (x, y, r) in enumerate(circles):
                 info = {
                     "label": fused[i],
                     "color": color_labels[i],
                     "hsv": f"H:{color_results[i]['hue']:.0f} S:{color_results[i]['sat']:.0f}",
-                    "sift": feature_labels[i],
                 }
                 if state["scale_factor"] is not None:
                     info["size_mm"] = f"{2 * r * state['scale_factor']:.1f}mm"
@@ -866,6 +891,12 @@ def main():
             display_circles = circles
         else:
             tracker.update(circles, coin_info or [])
+            if feature_db:
+                target = tracker.pop_sift_target()
+                if target:
+                    tid, tx, ty, tr = target
+                    label, kp_data = classify_single_coin(frame, tx, ty, tr, feature_db)
+                    tracker.set_sift_result(tid, label, kp_data)
             stable_circles, stable_info = tracker.get_stable_coins()
             draw_circles(frame, stable_circles, stable_info or None)
             display_circles = stable_circles
@@ -875,8 +906,10 @@ def main():
             draw_calibration(frame, state, circles)
         elif state["mode"] == "learn":
             draw_learning(frame, state, circles, feature_db)
-        elif state["mode"] == "sift" and all_keypoints:
-            draw_keypoints_on_frame(frame, all_keypoints)
+        elif state["mode"] == "sift":
+            all_keypoints = tracker.get_all_sift_keypoints()
+            if all_keypoints:
+                draw_keypoints_on_frame(frame, all_keypoints)
 
         draw_overlay(frame, state, display_circles, display_info)
 
