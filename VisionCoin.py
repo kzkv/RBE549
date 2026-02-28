@@ -62,6 +62,7 @@ FLANN_TREES = 5
 FLANN_CHECKS = 100
 RATIO_THRESHOLD = 0.75
 MIN_GOOD_MATCHES = 5
+SIFT_DISCRIMINATION_RATIO = 1.5
 SIFT_VOTE_WEIGHT = 3
 
 CAMERA_INDEX = 0
@@ -326,16 +327,16 @@ def learn_coins(frame, circles, denomination, feature_db):
 
 
 def classify_single_coin(frame, x, y, r, feature_db):
-    """Run SIFT/FLANN for one coin, returning (label, keypoints)."""
+    """Run SIFT/FLANN for one coin, returning (bias_label, top_match, keypoints)."""
     kp, des = extract_features(frame, x, y, r)
     if des is None or len(des) < 2:
-        return None, (kp, x, y, r)
+        return None, None, (kp, x, y, r)
 
     index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=FLANN_TREES)
     search_params = dict(checks=FLANN_CHECKS)
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
-    best_name, best_count = None, 0
+    match_counts = {}
     for name, samples in feature_db.items():
         total_good = 0
         for sample in samples:
@@ -345,11 +346,25 @@ def classify_single_coin(frame, x, y, r, feature_db):
             matches = flann.knnMatch(des, stored_des, k=2)
             good = [m for m, n in matches if m.distance < RATIO_THRESHOLD * n.distance]
             total_good += len(good)
-        if total_good > best_count:
-            best_count = total_good
-            best_name = name
-    label = best_name if best_count >= MIN_GOOD_MATCHES else None
-    return label, (kp, x, y, r)
+        match_counts[name] = total_good
+
+    ranked = sorted(match_counts.items(), key=lambda item: item[1], reverse=True)
+    best_name, best_count = ranked[0]
+    second_count = ranked[1][1] if len(ranked) > 1 else 0
+
+    counts_str = " ".join(f"{n}:{c}" for n, c in ranked)
+    ratio = best_count / second_count if second_count > 0 else float("inf")
+    print(f"SIFT @ ({x},{y}): {counts_str}  ratio={ratio:.2f}")
+
+    top_match = best_name if best_count >= MIN_GOOD_MATCHES else None
+
+    if len(ranked) < 2 or best_count < MIN_GOOD_MATCHES:
+        bias_label = None
+    elif second_count == 0 or best_count > second_count * SIFT_DISCRIMINATION_RATIO:
+        bias_label = best_name
+    else:
+        bias_label = None
+    return bias_label, top_match, (kp, x, y, r)
 
 
 def draw_keypoints_on_frame(frame, all_keypoints):
@@ -445,10 +460,11 @@ class CoinTracker:
             return track_id, x, y, r
         return None
 
-    def set_sift_result(self, track_id, label, keypoints):
+    def set_sift_result(self, track_id, bias_label, top_match, keypoints):
         """Store SIFT classification result on a track."""
         if track_id in self._tracks:
-            self._tracks[track_id]["sift_label"] = label
+            self._tracks[track_id]["sift_label"] = bias_label
+            self._tracks[track_id]["sift_top"] = top_match
             self._tracks[track_id]["sift_keypoints"] = keypoints
 
     def _create_track(self, circle, info):
@@ -456,6 +472,7 @@ class CoinTracker:
             "observations": deque(maxlen=WINDOW_SIZE),
             "last_seen": self._frame_count,
             "sift_label": None,
+            "sift_top": None,
             "sift_keypoints": None,
         }
         self._add_observation(track, circle, info)
@@ -507,8 +524,9 @@ class CoinTracker:
                 info["size_mm"] = Counter(sizes).most_common(1)[0][0]
             if hsvs:
                 info["hsv"] = hsvs[-1]
-            if sift_label:
-                info["sift"] = sift_label
+            sift_top = track.get("sift_top")
+            if sift_top:
+                info["sift"] = sift_top
             stable_info.append(info)
 
         return stable_circles, stable_info
@@ -895,8 +913,10 @@ def main():
                 target = tracker.pop_sift_target()
                 if target:
                     tid, tx, ty, tr = target
-                    label, kp_data = classify_single_coin(frame, tx, ty, tr, feature_db)
-                    tracker.set_sift_result(tid, label, kp_data)
+                    bias_label, top_match, kp_data = classify_single_coin(
+                        frame, tx, ty, tr, feature_db
+                    )
+                    tracker.set_sift_result(tid, bias_label, top_match, kp_data)
             stable_circles, stable_info = tracker.get_stable_coins()
             draw_circles(frame, stable_circles, stable_info or None)
             display_circles = stable_circles
