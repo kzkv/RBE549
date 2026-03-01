@@ -17,8 +17,6 @@ COIN_SPECS = {
     "dollar": {"diameter_mm": 26.50, "value": 1.00},
 }
 
-DENOMINATION_NAMES = list(COIN_SPECS.keys())
-
 DENOMINATION_KEYS = {
     ord("1"): "penny",
     ord("2"): "nickel",
@@ -199,14 +197,6 @@ def calibrate(pixel_radius, denomination):
     return diameter_mm / (2 * pixel_radius)
 
 
-def expected_radii(scale_factor):
-    """Compute expected pixel radius for each denomination."""
-    return {
-        name: (spec["diameter_mm"] / 2) / scale_factor
-        for name, spec in COIN_SPECS.items()
-    }
-
-
 def classify_by_size(circles, scale_factor):
     """Classify each circle by closest denomination based on radius."""
     labels = []
@@ -225,15 +215,15 @@ def classify_by_size(circles, scale_factor):
     return labels
 
 
-def extract_coin_roi(frame, x, y, r):
-    """Extract circular ROI pixels from a coin, shrunk to avoid edge artifacts."""
+def extract_coin_roi(frame, x, y, r, shrink=1.0):
+    """Extract circular ROI pixels from a coin with optional radius shrink."""
     h, w = frame.shape[:2]
-    inner_r = int(r * ROI_SHRINK)
-    x1, y1 = max(0, x - inner_r), max(0, y - inner_r)
-    x2, y2 = min(w, x + inner_r), min(h, y + inner_r)
+    effective_r = int(r * shrink)
+    x1, y1 = max(0, x - effective_r), max(0, y - effective_r)
+    x2, y2 = min(w, x + effective_r), min(h, y + effective_r)
     crop = frame[y1:y2, x1:x2]
     mask = np.zeros(crop.shape[:2], dtype=np.uint8)
-    cv2.circle(mask, (x - x1, y - y1), inner_r, 255, -1)
+    cv2.circle(mask, (x - x1, y - y1), effective_r, 255, -1)
     return crop, mask
 
 
@@ -242,7 +232,7 @@ def classify_by_color(frame, circles):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     results = []
     for x, y, r in circles:
-        crop, mask = extract_coin_roi(hsv, x, y, r)
+        crop, mask = extract_coin_roi(hsv, x, y, r, shrink=ROI_SHRINK)
         mean_hue = cv2.mean(crop[:, :, 0], mask=mask)[0]
         mean_sat = cv2.mean(crop[:, :, 1], mask=mask)[0]
         if mean_sat < SATURATION_THRESHOLD:
@@ -289,24 +279,13 @@ def load_features():
         return pickle.load(f)
 
 
-def extract_full_roi(frame, x, y, r):
-    """Extract circular ROI at full detected radius for feature extraction."""
-    h, w = frame.shape[:2]
-    x1, y1 = max(0, x - r), max(0, y - r)
-    x2, y2 = min(w, x + r), min(h, y + r)
-    crop = frame[y1:y2, x1:x2]
-    mask = np.zeros(crop.shape[:2], dtype=np.uint8)
-    cv2.circle(mask, (x - x1, y - y1), r, 255, -1)
-    return crop, mask
-
-
 SIFT = cv2.SIFT_create()
 
 
 def extract_features(frame, x, y, r):
     """Extract SIFT keypoints and descriptors from a circular coin ROI."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
-    crop, mask = extract_full_roi(gray, x, y, r)
+    crop, mask = extract_coin_roi(gray, x, y, r)
     kp, des = SIFT.detectAndCompute(crop, mask)
     return kp, des
 
@@ -351,10 +330,6 @@ def classify_single_coin(frame, x, y, r, feature_db):
     ranked = sorted(match_counts.items(), key=lambda item: item[1], reverse=True)
     best_name, best_count = ranked[0]
     second_count = ranked[1][1] if len(ranked) > 1 else 0
-
-    counts_str = " ".join(f"{n}:{c}" for n, c in ranked)
-    ratio = best_count / second_count if second_count > 0 else float("inf")
-    print(f"SIFT @ ({x},{y}): {counts_str}  ratio={ratio:.2f}")
 
     top_match = best_name if best_count >= MIN_GOOD_MATCHES else None
 
@@ -632,7 +607,7 @@ def draw_circles(frame, circles, coin_info=None):
         color_text = info.get("color", "")
         hsv_text = info.get("hsv", "")
         sift_text = info.get("sift", "")
-        line_y = y - r // 3
+        line_y = y - r * 2 // 3
         if size_text:
             _draw_text_with_bg(frame, size_text, x, line_y, 0.4, 1)
             line_y += 16
