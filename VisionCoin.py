@@ -61,6 +61,7 @@ FLANN_CHECKS = 100
 RATIO_THRESHOLD = 0.75
 MIN_GOOD_MATCHES = 5
 SIFT_DISCRIMINATION_RATIO = 1.5
+SIFT_DELAY_FRAMES = 60
 SIFT_VOTE_WEIGHT = 3
 
 CAMERA_INDEX = 0
@@ -391,7 +392,7 @@ class CoinTracker:
                 unmatched.remove(best_idx)
                 new_label = self._stable_label(track)
                 if new_label and new_label != prev_label:
-                    self._enqueue_sift(track_id)
+                    track["sift_ready_at"] = self._frame_count + SIFT_DELAY_FRAMES
 
         for idx in unmatched:
             info = coin_info[idx] if coin_info else {}
@@ -404,6 +405,11 @@ class CoinTracker:
                 > EVICTION_FRAMES
             ):
                 del self._tracks[track_id]
+                continue
+            ready_at = self._tracks[track_id].get("sift_ready_at")
+            if ready_at and self._frame_count >= ready_at:
+                self._enqueue_sift(track_id)
+                self._tracks[track_id]["sift_ready_at"] = None
 
         self._sift_queue = deque(tid for tid in self._sift_queue if tid in self._tracks)
 
@@ -446,6 +452,7 @@ class CoinTracker:
         track = {
             "observations": deque(maxlen=WINDOW_SIZE),
             "last_seen": self._frame_count,
+            "sift_ready_at": None,
             "sift_label": None,
             "sift_top": None,
             "sift_keypoints": None,
