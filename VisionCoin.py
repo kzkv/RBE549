@@ -60,11 +60,11 @@ FLANN_TREES = 5
 FLANN_CHECKS = 100
 RATIO_THRESHOLD = 0.75
 MIN_GOOD_MATCHES = 5
-SIFT_DISCRIMINATION_RATIO = 1.5
+SIFT_DISTANCE_RATIO = 0.85
 SIFT_DELAY_FRAMES = 60
 SIFT_VOTE_WEIGHT = 3
 
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 WINDOW_NAME = "VisionCoin"
 DATABASE_PATH = Path("VisionCoin.pkl")
 FEATURES_PATH = Path("VisionCoin_features.pkl")
@@ -166,7 +166,7 @@ def detect_coins(frame, state):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred = cv2.medianBlur(gray, MEDIAN_BLUR_K)
 
-    if state["scale_factor"] is not None:
+    if state["scale_factor"] is not None and state["mode"] != "tune":
         min_r, max_r = adaptive_radius_bounds(state["scale_factor"])
     else:
         min_r = state["hough_min_radius"]
@@ -316,27 +316,35 @@ def classify_single_coin(frame, x, y, r, feature_db):
     search_params = dict(checks=FLANN_CHECKS)
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
-    match_counts = {}
+    match_stats = {}
     for name, samples in feature_db.items():
-        total_good = 0
+        distances = []
         for sample in samples:
             stored_des = sample["des"] if isinstance(sample, dict) else sample
             if stored_des is None or len(stored_des) < 2:
                 continue
             matches = flann.knnMatch(des, stored_des, k=2)
-            good = [m for m, n in matches if m.distance < RATIO_THRESHOLD * n.distance]
-            total_good += len(good)
-        match_counts[name] = total_good
+            for m, n in matches:
+                if m.distance < RATIO_THRESHOLD * n.distance:
+                    distances.append(m.distance)
+        match_stats[name] = {
+            "count": len(distances),
+            "avg_dist": sum(distances) / len(distances) if distances else float("inf"),
+        }
 
-    ranked = sorted(match_counts.items(), key=lambda item: item[1], reverse=True)
-    best_name, best_count = ranked[0]
-    second_count = ranked[1][1] if len(ranked) > 1 else 0
+    ranked = sorted(match_stats.items(), key=lambda item: item[1]["avg_dist"])
+    best_name = ranked[0][0]
+    best = ranked[0][1]
+    second = ranked[1][1] if len(ranked) > 1 else {"avg_dist": float("inf")}
 
-    top_match = best_name if best_count >= MIN_GOOD_MATCHES else None
+    top_match = best_name if best["count"] >= MIN_GOOD_MATCHES else None
 
-    if len(ranked) < 2 or best_count < MIN_GOOD_MATCHES:
+    if len(ranked) < 2 or best["count"] < MIN_GOOD_MATCHES:
         bias_label = None
-    elif second_count == 0 or best_count > second_count * SIFT_DISCRIMINATION_RATIO:
+    elif (
+        second["avg_dist"] == float("inf")
+        or best["avg_dist"] < second["avg_dist"] * SIFT_DISTANCE_RATIO
+    ):
         bias_label = best_name
     else:
         bias_label = None
