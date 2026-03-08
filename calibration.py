@@ -91,7 +91,7 @@ def compute_reprojection_error(obj_points, img_points, rvecs, tvecs, mtx, dist):
 def undistort_image(img, mtx, dist):
     """Remove lens distortion using the calibrated camera parameters."""
     h, w = img.shape[:2]
-    new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 1, (w, h))
+    new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0, (w, h))
     return cv2.undistort(img, mtx, dist, None, new_mtx)
 
 
@@ -230,10 +230,70 @@ def part2_calibrate_distorted():
         )
 
 
+SHOWCASE_COUNT = 6
+
+
+def part2_final_visuals():
+    """Part 2: Three-panel comparison of clean, distorted, and undistorted images."""
+    obj_pts_c, img_pts_c, clean_imgs, clean_names, _, _, _ = find_corners(OWN_IMAGE_DIR)
+    mtx_c, dist_c, _, _ = calibrate(obj_pts_c, img_pts_c, clean_imgs[0].shape[1::-1])
+
+    obj_pts_d, img_pts_d, dist_imgs, dist_names, img_size_d, _, _ = find_corners(
+        DISTORTED_IMAGE_DIR
+    )
+    mtx_d, dist_d, _, _ = calibrate(obj_pts_d, img_pts_d, img_size_d)
+
+    clean_by_name = dict(zip(clean_names, clean_imgs))
+    dist_by_name = dict(zip(dist_names, dist_imgs))
+
+    shared_names = [n for n in clean_names if n in dist_by_name][:SHOWCASE_COUNT]
+
+    panels = []
+    h, w = clean_imgs[0].shape[:2]
+    scale = 480 / w
+    for name in shared_names:
+        clean = cv2.resize(clean_by_name[name], (0, 0), fx=scale, fy=scale)
+        distorted = cv2.resize(dist_by_name[name], (0, 0), fx=scale, fy=scale)
+        undistorted = cv2.resize(
+            undistort_image(dist_by_name[name], mtx_d, dist_d),
+            (0, 0),
+            fx=scale,
+            fy=scale,
+        )
+        cv2.putText(
+            clean, "Original", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
+        )
+        cv2.putText(
+            distorted,
+            "Distorted",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 0, 255),
+            2,
+        )
+        cv2.putText(
+            undistorted,
+            "Undistorted",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 0, 0),
+            2,
+        )
+        panels.append(np.hstack([clean, distorted, undistorted]))
+
+    grid = np.vstack(panels)
+    cv2.imshow("Part 2: Original / Distorted / Undistorted", grid)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
 RUN_PART1 = False
 RUN_PART2_BASELINE = False
 RUN_PART2_DISTORT = False
-RUN_PART2_CALIBRATE = True
+RUN_PART2_CALIBRATE = False
+RUN_PART2_VISUALS = True
 
 if __name__ == "__main__":
     if RUN_PART1:
@@ -244,3 +304,5 @@ if __name__ == "__main__":
         part2_distort()
     if RUN_PART2_CALIBRATE:
         part2_calibrate_distorted()
+    if RUN_PART2_VISUALS:
+        part2_final_visuals()
