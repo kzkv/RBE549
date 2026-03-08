@@ -13,6 +13,10 @@ CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 # Directories
 SAMPLE_IMAGE_DIR = Path("data/left")
 OWN_IMAGE_DIR = Path("data/checkerboard")
+DISTORTED_IMAGE_DIR = Path("data/distorted")
+
+# Ground-truth distortion for Part 2 (k1, k2, p1, p2, k3)
+GT_DIST = np.array([-0.3, 0.1, 0.01, -0.005, 0.0])
 
 
 def find_corners(image_dir, board_size=CHECKERBOARD):
@@ -91,6 +95,17 @@ def undistort_image(img, mtx, dist):
     return cv2.undistort(img, mtx, dist, None, new_mtx)
 
 
+def apply_distortion(img, mtx, dist_coeffs):
+    """Apply artificial distortion to an image using the inverse undistortPoints trick."""
+    h, w = img.shape[:2]
+    u, v = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    pts = np.stack([u.ravel(), v.ravel()], axis=-1).reshape(-1, 1, 2)
+    undistorted_pts = cv2.undistortPoints(pts, mtx, dist_coeffs, P=mtx)
+    map_x = undistorted_pts[:, 0, 0].reshape(h, w)
+    map_y = undistorted_pts[:, 0, 1].reshape(h, w)
+    return cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR)
+
+
 def save_calibration(mtx, dist, error):
     """Save camera matrix, distortion coefficients, and reprojection error as .npy files."""
     np.save("camera_matrix.npy", mtx)
@@ -110,7 +125,8 @@ def build_grid(images, cols):
     return np.vstack(rows)
 
 
-if __name__ == "__main__":
+def part1():
+    """Part 1: Calibrate OpenCV sample images, undistort, save parameters."""
     obj_pts, img_pts, imgs, img_names, img_size, all_imgs, all_found = find_corners(
         SAMPLE_IMAGE_DIR
     )
@@ -134,6 +150,66 @@ if __name__ == "__main__":
         pairs.append(np.hstack([img, undistorted]))
 
     grid = build_grid(pairs, cols=2)
-    cv2.imshow("Original vs Undistorted", grid)
+    cv2.imshow("Part 1: Original vs Undistorted", grid)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+
+def part2_baseline():
+    """Part 2: Calibrate own clean images, undistort, and show grid."""
+    obj_pts, img_pts, imgs, names, img_size, _, _ = find_corners(OWN_IMAGE_DIR)
+    mtx, dist, rvecs, tvecs = calibrate(obj_pts, img_pts, img_size)
+    errors = compute_reprojection_error(obj_pts, img_pts, rvecs, tvecs, mtx, dist)
+
+    pairs = []
+    for img, name, error in zip(imgs, names, errors):
+        undistorted = undistort_image(img, mtx, dist)
+        h, w = img.shape[:2]
+        scale = 640 / w
+        img_small = cv2.resize(img, (0, 0), fx=scale, fy=scale)
+        und_small = cv2.resize(undistorted, (0, 0), fx=scale, fy=scale)
+        cv2.putText(
+            img_small, name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
+        )
+        cv2.putText(
+            und_small,
+            f"err: {error:.4f}px",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2,
+        )
+        pairs.append(np.hstack([img_small, und_small]))
+
+    grid = build_grid(pairs, cols=2)
+    cv2.imshow("Part 2: Baseline Original vs Undistorted", grid)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+def part2_distort():
+    """Part 2: Apply artificial distortion to own images and save them."""
+    obj_pts, img_pts, imgs, names, img_size, _, _ = find_corners(OWN_IMAGE_DIR)
+    mtx, dist, rvecs, tvecs = calibrate(obj_pts, img_pts, img_size)
+
+    print(f"\nApplying ground-truth distortion: {GT_DIST}")
+    DISTORTED_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    for img, name in zip(imgs, names):
+        distorted = apply_distortion(img, mtx, GT_DIST)
+        path = DISTORTED_IMAGE_DIR / f"{name}.jpg"
+        cv2.imwrite(str(path), distorted)
+        print(f"Saved {path}")
+
+
+RUN_PART1 = False
+RUN_PART2_BASELINE = True
+RUN_PART2_DISTORT = False
+
+if __name__ == "__main__":
+    if RUN_PART1:
+        part1()
+    if RUN_PART2_BASELINE:
+        part2_baseline()
+    if RUN_PART2_DISTORT:
+        part2_distort()
