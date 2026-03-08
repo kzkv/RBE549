@@ -67,12 +67,29 @@ def calibrate(obj_points, img_points, image_size):
     return mtx, dist, rvecs, tvecs
 
 
+def compute_reprojection_error(obj_points, img_points, rvecs, tvecs, mtx, dist):
+    """Compute per-image mean reprojection error using projectPoints."""
+    errors = []
+    for obj, img, rvec, tvec in zip(obj_points, img_points, rvecs, tvecs):
+        projected, _ = cv2.projectPoints(obj, rvec, tvec, mtx, dist)
+        error = cv2.norm(img, projected, cv2.NORM_L2) / len(projected)
+        errors.append(error)
+
+    print("\nPer-image reprojection error:")
+    for i, e in enumerate(errors):
+        print(f"  Image {i + 1:2d}: {e:.4f}")
+    print(f"  Mean:     {np.mean(errors):.4f}")
+    return errors
+
+
 def save_calibration(mtx, dist, error):
     """Save camera matrix, distortion coefficients, and reprojection error as .npy files."""
     np.save("camera_matrix.npy", mtx)
     np.save("dist_coeffs.npy", dist)
     np.save("reprojection_error.npy", np.array(error))
-    print("\nCalibration saved to camera_matrix.npy, dist_coeffs.npy, reprojection_error.npy")
+    print(
+        "\nCalibration saved to camera_matrix.npy, dist_coeffs.npy, reprojection_error.npy"
+    )
 
 
 def build_grid(images, cols):
@@ -89,7 +106,8 @@ if __name__ == "__main__":
         SAMPLE_IMAGE_DIR
     )
     mtx, dist, rvecs, tvecs = calibrate(obj_pts, img_pts, img_size)
-    save_calibration(mtx, dist, 0.0)
+    errors = compute_reprojection_error(obj_pts, img_pts, rvecs, tvecs, mtx, dist)
+    save_calibration(mtx, dist, np.mean(errors))
 
     previews = []
     corner_idx = 0
