@@ -16,7 +16,7 @@ OWN_IMAGE_DIR = Path("data/checkerboard")
 DISTORTED_IMAGE_DIR = Path("data/distorted")
 
 # Ground-truth distortion for Part 2 (k1, k2, p1, p2, k3)
-GT_DIST = np.array([-0.3, 0.1, 0.01, -0.005, 0.0])
+GT_DIST = np.array([0.5, -0.1, 0.01, -0.005, 0.0])
 
 
 def find_corners(image_dir, board_size=CHECKERBOARD):
@@ -203,8 +203,8 @@ def part2_distort():
 
 
 RUN_PART1 = False
-RUN_PART2_BASELINE = True
-RUN_PART2_DISTORT = False
+RUN_PART2_BASELINE = False
+RUN_PART2_DISTORT = True
 
 if __name__ == "__main__":
     if RUN_PART1:
