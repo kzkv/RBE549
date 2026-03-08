@@ -202,9 +202,38 @@ def part2_distort():
         print(f"Saved {path}")
 
 
+def part2_calibrate_distorted():
+    """Part 2: Calibrate distorted images, compare recovered params to ground truth."""
+    print("\n--- Baseline calibration (clean images) ---")
+    obj_pts_b, img_pts_b, _, _, img_size_b, _, _ = find_corners(OWN_IMAGE_DIR)
+    _, baseline_dist, _, _ = calibrate(obj_pts_b, img_pts_b, img_size_b)
+
+    print("\n--- Distorted image calibration ---")
+    obj_pts, img_pts, imgs, names, img_size, _, _ = find_corners(DISTORTED_IMAGE_DIR)
+    mtx, dist, rvecs, tvecs = calibrate(obj_pts, img_pts, img_size)
+    compute_reprojection_error(obj_pts, img_pts, rvecs, tvecs, mtx, dist)
+
+    labels = ["k1", "k2", "p1", "p2", "k3"]
+    baseline = baseline_dist.ravel()
+    recovered = dist.ravel()
+    expected = baseline + GT_DIST
+
+    print("\n--- Parameter Comparison ---")
+    print(
+        f"{'Param':>6s} {'Baseline':>12s} {'GT Applied':>12s} "
+        f"{'Expected':>12s} {'Recovered':>12s} {'Delta':>12s}"
+    )
+    for label, b, g, e, r in zip(labels, baseline, GT_DIST, expected, recovered):
+        print(
+            f"{label:>6s} {b:>12.6f} {g:>12.6f} "
+            f"{e:>12.6f} {r:>12.6f} {r - e:>12.6f}"
+        )
+
+
 RUN_PART1 = False
 RUN_PART2_BASELINE = False
-RUN_PART2_DISTORT = True
+RUN_PART2_DISTORT = False
+RUN_PART2_CALIBRATE = True
 
 if __name__ == "__main__":
     if RUN_PART1:
@@ -213,3 +242,5 @@ if __name__ == "__main__":
         part2_baseline()
     if RUN_PART2_DISTORT:
         part2_distort()
+    if RUN_PART2_CALIBRATE:
+        part2_calibrate_distorted()
