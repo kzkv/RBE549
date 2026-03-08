@@ -10,7 +10,7 @@ CAPTURES_DIR.mkdir(exist_ok=True)
 PREVIEW_SIZE = (1280, 720)
 ZOOM_CROP = (1920, 1080)
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
 
