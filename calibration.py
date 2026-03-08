@@ -56,9 +56,6 @@ def find_corners(image_dir, board_size=CHECKERBOARD):
     return obj_points, img_points, images, image_size, all_images, all_found
 
 
-OUTPUT_DIR = Path("output")
-
-
 def calibrate(obj_points, img_points, image_size):
     """Run camera calibration and return intrinsics, distortion, and extrinsics."""
     rms, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(
@@ -70,11 +67,12 @@ def calibrate(obj_points, img_points, image_size):
     return mtx, dist, rvecs, tvecs
 
 
-def save_calibration(path, mtx, dist, error):
-    """Save camera matrix, distortion coefficients, and reprojection error to a single .npz."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, camera_matrix=mtx, dist_coeffs=dist, reprojection_error=error)
-    print(f"\nCalibration saved to {path}")
+def save_calibration(mtx, dist, error):
+    """Save camera matrix, distortion coefficients, and reprojection error as .npy files."""
+    np.save("camera_matrix.npy", mtx)
+    np.save("dist_coeffs.npy", dist)
+    np.save("reprojection_error.npy", np.array(error))
+    print("\nCalibration saved to camera_matrix.npy, dist_coeffs.npy, reprojection_error.npy")
 
 
 def build_grid(images, cols):
@@ -91,7 +89,7 @@ if __name__ == "__main__":
         SAMPLE_IMAGE_DIR
     )
     mtx, dist, rvecs, tvecs = calibrate(obj_pts, img_pts, img_size)
-    save_calibration(OUTPUT_DIR / "part1.npz", mtx, dist, 0.0)
+    save_calibration(mtx, dist, 0.0)
 
     previews = []
     corner_idx = 0
