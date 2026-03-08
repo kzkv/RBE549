@@ -24,6 +24,7 @@ def find_corners(image_dir, board_size=CHECKERBOARD):
     obj_points = []
     img_points = []
     images = []
+    names = []
     all_images = []
     all_found = []
     image_size = None
@@ -50,10 +51,11 @@ def find_corners(image_dir, board_size=CHECKERBOARD):
         obj_points.append(objp)
         img_points.append(refined)
         images.append(img)
+        names.append(path.stem)
         print(f"Corners found: {path.name}")
 
     print(f"\n{len(images)}/{len(paths)} images usable")
-    return obj_points, img_points, images, image_size, all_images, all_found
+    return obj_points, img_points, images, names, image_size, all_images, all_found
 
 
 def calibrate(obj_points, img_points, image_size):
@@ -82,6 +84,13 @@ def compute_reprojection_error(obj_points, img_points, rvecs, tvecs, mtx, dist):
     return errors
 
 
+def undistort_image(img, mtx, dist):
+    """Remove lens distortion using the calibrated camera parameters."""
+    h, w = img.shape[:2]
+    new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 1, (w, h))
+    return cv2.undistort(img, mtx, dist, None, new_mtx)
+
+
 def save_calibration(mtx, dist, error):
     """Save camera matrix, distortion coefficients, and reprojection error as .npy files."""
     np.save("camera_matrix.npy", mtx)
@@ -102,33 +111,29 @@ def build_grid(images, cols):
 
 
 if __name__ == "__main__":
-    obj_pts, img_pts, imgs, img_size, all_imgs, all_found = find_corners(
+    obj_pts, img_pts, imgs, img_names, img_size, all_imgs, all_found = find_corners(
         SAMPLE_IMAGE_DIR
     )
     mtx, dist, rvecs, tvecs = calibrate(obj_pts, img_pts, img_size)
     errors = compute_reprojection_error(obj_pts, img_pts, rvecs, tvecs, mtx, dist)
     save_calibration(mtx, dist, np.mean(errors))
 
-    previews = []
-    corner_idx = 0
-    for img, found in zip(all_imgs, all_found):
-        preview = img.copy()
-        if found:
-            cv2.drawChessboardCorners(preview, CHECKERBOARD, img_pts[corner_idx], True)
-            corner_idx += 1
-        else:
-            cv2.putText(
-                preview,
-                "NOT FOUND",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 0, 255),
-                2,
-            )
-        previews.append(preview)
+    pairs = []
+    for img, name, error in zip(imgs, img_names, errors):
+        undistorted = undistort_image(img, mtx, dist)
+        cv2.putText(img, name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(
+            undistorted,
+            f"err: {error:.4f}px",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2,
+        )
+        pairs.append(np.hstack([img, undistorted]))
 
-    grid = build_grid(previews, cols=4)
-    cv2.imshow("Detected Corners", grid)
+    grid = build_grid(pairs, cols=2)
+    cv2.imshow("Original vs Undistorted", grid)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
