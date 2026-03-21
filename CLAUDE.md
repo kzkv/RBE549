@@ -24,6 +24,13 @@ Each weekly assignment follows this sequence:
 - Never auto-commit or suggest committing. The student commits when ready.
 - The Critic notes observations for the lab report in memory (`week{N}-report-notes.md`).
 
+## General Rules
+
+- When implementing new functionality, integrate into the existing project architecture first. Read the codebase structure before writing anything. Only create standalone scripts if explicitly requested.
+- Start with the simplest working implementation. Do not add modes, views, or abstractions beyond what was requested. Let the author request additions incrementally.
+- When the author provides explicit parameters, configurations, or specifications, use them verbatim. Do not infer alternatives or "improve" on stated values.
+- When writing reports or prose, match the author's existing tone. Do not produce generic AI-sounding text. If no prior sample is available, ask for one.
+
 ## Code Style (Python, project-specific)
 
 - Single-line comments only at module level (section dividers, constant explanations).
