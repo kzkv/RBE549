@@ -14,6 +14,8 @@ CHECKERBOARD = (9, 6)
 SQUARE_SIZE_MM = 25.0
 CORNER_CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
+RECALIBRATE = False
+
 
 def calibrate_camera():
     """Calibrate from checkerboard images, save K and dist, return them."""
@@ -83,11 +85,16 @@ def load_and_undistort(path, K, dist):
 
 
 def main():
-    # Part 0: Calibrate camera from checkerboard images
+    # Part 0: Camera calibration
     print("=" * 60)
     print("PART 0: Camera Calibration")
     print("=" * 60)
-    K, dist = calibrate_camera()
+    if RECALIBRATE:
+        K, dist = calibrate_camera()
+    else:
+        K, dist = load_calibration()
+        print(f"  Loaded K from {CALIBRATION_MATRIX}")
+        print(f"  K:\n{K}")
 
     # Load and undistort stereo pair
     print(f"\nUndistorting {IMAGE_LEFT} and {IMAGE_RIGHT}...")
