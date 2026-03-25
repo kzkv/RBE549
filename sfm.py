@@ -164,6 +164,32 @@ def draw_matches(img_left, img_right, kp_left, kp_right, matches):
     )
 
 
+def compute_fundamental_matrix(kp_left, kp_right, matches):
+    """Compute F via RANSAC, filter to inliers, verify epipolar constraint."""
+    pts_left = np.float32([kp_left[m.queryIdx].pt for m in matches])
+    pts_right = np.float32([kp_right[m.trainIdx].pt for m in matches])
+
+    F, mask = cv2.findFundamentalMat(pts_left, pts_right, cv2.FM_RANSAC)
+    inlier_mask = mask.ravel().astype(bool)
+    pts_left = pts_left[inlier_mask]
+    pts_right = pts_right[inlier_mask]
+    inlier_matches = [m for m, flag in zip(matches, inlier_mask) if flag]
+
+    print(f"  Inliers after RANSAC: {len(inlier_matches)}/{len(matches)}")
+    print(f"  F:\n{F}")
+
+    # Verify epipolar constraint: q_R^T @ F @ q_L = 0
+    ones = np.ones((len(pts_left), 1))
+    homog_left = np.hstack([pts_left, ones])
+    homog_right = np.hstack([pts_right, ones])
+    residuals = np.abs(np.sum(homog_right * (homog_left @ F.T), axis=1))
+    print(f"  Epipolar constraint residuals:")
+    print(f"    Mean: {residuals.mean():.6f}")
+    print(f"    Max:  {residuals.max():.6f}")
+
+    return F, pts_left, pts_right, inlier_matches
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
@@ -198,6 +224,14 @@ def main():
     kp_left, kp_right, matches = detect_and_match(img_left, img_right)
     draw_features(img_left, img_right, kp_left, kp_right)
     draw_matches(img_left, img_right, kp_left, kp_right, matches)
+
+    # Part 3: Fundamental matrix
+    print("\n" + "=" * 60)
+    print("PART 3: Fundamental Matrix")
+    print("=" * 60)
+    F, pts_left, pts_right, inlier_matches = compute_fundamental_matrix(
+        kp_left, kp_right, matches
+    )
 
 
 if __name__ == "__main__":
