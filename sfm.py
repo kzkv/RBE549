@@ -198,6 +198,15 @@ def compute_essential_matrix(F, K):
     return E
 
 
+def decompose_essential(E):
+    """Decompose E into two candidate rotations and one translation."""
+    R1, R2, T = cv2.decomposeEssentialMat(E)
+    print(f"  R1:\n{R1}")
+    print(f"  R2:\n{R2}")
+    print(f"  T:\n{T.ravel()}")
+    return R1, R2, T
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
@@ -246,6 +255,12 @@ def main():
     print("PART 4: Essential Matrix")
     print("=" * 60)
     E = compute_essential_matrix(F, K)
+
+    # Part 5: Recover R and T
+    print("\n" + "=" * 60)
+    print("PART 5: Decompose Essential Matrix")
+    print("=" * 60)
+    R1, R2, T = decompose_essential(E)
 
 
 if __name__ == "__main__":
