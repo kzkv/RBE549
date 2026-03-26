@@ -190,6 +190,14 @@ def compute_fundamental_matrix(kp_left, kp_right, matches):
     return F, pts_left, pts_right, inlier_matches
 
 
+def compute_essential_matrix(F, K):
+    """Compute E from F and K, verify det(E) = 0."""
+    E = K.T @ F @ K
+    print(f"  E:\n{E}")
+    print(f"  det(E) = {np.linalg.det(E):.6e}")
+    return E
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
@@ -232,6 +240,12 @@ def main():
     F, pts_left, pts_right, inlier_matches = compute_fundamental_matrix(
         kp_left, kp_right, matches
     )
+
+    # Part 4: Essential matrix
+    print("\n" + "=" * 60)
+    print("PART 4: Essential Matrix")
+    print("=" * 60)
+    E = compute_essential_matrix(F, K)
 
 
 if __name__ == "__main__":
