@@ -279,6 +279,24 @@ def cheirality_check(pts_left, pts_right, P0, P1_candidates, R1, R2, T):
     return best_points, best_idx
 
 
+def compute_reprojection_error(points_3d, pts_left, pts_right, P0, P1):
+    """Compute mean reprojection error for both cameras."""
+    homog = np.hstack([points_3d, np.ones((len(points_3d), 1))])
+
+    proj0 = (P0 @ homog.T).T
+    proj0 = proj0[:, :2] / proj0[:, 2:3]
+    errors0 = np.linalg.norm(pts_left - proj0, axis=1)
+
+    proj1 = (P1 @ homog.T).T
+    proj1 = proj1[:, :2] / proj1[:, 2:3]
+    errors1 = np.linalg.norm(pts_right - proj1, axis=1)
+
+    print(f"  Camera 0: mean={errors0.mean():.4f} px, max={errors0.max():.4f} px")
+    print(f"  Camera 1: mean={errors1.mean():.4f} px, max={errors1.max():.4f} px")
+    print(f"  Overall:  mean={(errors0.mean() + errors1.mean()) / 2:.4f} px")
+    return errors0, errors1
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
@@ -348,6 +366,14 @@ def main():
         pts_left, pts_right, P0, P1_candidates, R1, R2, T
     )
     P1 = P1_candidates[best_idx]
+
+    # Part 8: Reprojection error
+    print("\n" + "=" * 60)
+    print("PART 8: Reprojection Error")
+    print("=" * 60)
+    errors0, errors1 = compute_reprojection_error(
+        points_3d, pts_left, pts_right, P0, P1
+    )
 
 
 if __name__ == "__main__":
