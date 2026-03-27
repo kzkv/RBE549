@@ -1,4 +1,5 @@
-"""Mini Structure-from-Motion pipeline."""
+# Tom Kazakov
+# RBE 549, Week 9 Assignment: Mini Structure-from-Motion pipeline.
 
 import struct
 from pathlib import Path
