@@ -251,6 +251,34 @@ def triangulate_points(pts_left, pts_right, P0, P1):
     return points_3d
 
 
+def cheirality_check(pts_left, pts_right, P0, P1_candidates, R1, R2, T):
+    """Triangulate with each P1 candidate, select the one with most points in front of both cameras."""
+    extrinsics = [
+        (R1, T), (R1, -T), (R2, T), (R2, -T),
+    ]
+
+    best_idx, best_count, best_points = 0, 0, None
+    for i, (P1, (R, t)) in enumerate(zip(P1_candidates, extrinsics)):
+        points_3d = triangulate_points(pts_left, pts_right, P0, P1)
+
+        # Depth in camera 0: Z > 0
+        depth_cam0 = points_3d[:, 2]
+
+        # Depth in camera 1: third row of R @ X + t
+        homog = np.hstack([points_3d, np.ones((len(points_3d), 1))])
+        Rt = np.hstack([R, t])
+        depth_cam1 = (Rt @ homog.T)[2]
+
+        in_front = np.sum((depth_cam0 > 0) & (depth_cam1 > 0))
+        print(f"  Candidate {i + 1}: {in_front}/{len(points_3d)} points in front of both cameras")
+
+        if in_front > best_count:
+            best_idx, best_count, best_points = i, in_front, points_3d
+
+    print(f"  Selected candidate {best_idx + 1}")
+    return best_points, best_idx
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
@@ -311,6 +339,15 @@ def main():
     print("PARTS 6-6.5: Projection Matrices")
     print("=" * 60)
     P0, P1_candidates = build_projection_matrices(K, R1, R2, T)
+
+    # Parts 7-7.5: Triangulation and cheirality check
+    print("\n" + "=" * 60)
+    print("PARTS 7-7.5: Triangulation & Cheirality Check")
+    print("=" * 60)
+    points_3d, best_idx = cheirality_check(
+        pts_left, pts_right, P0, P1_candidates, R1, R2, T
+    )
+    P1 = P1_candidates[best_idx]
 
 
 if __name__ == "__main__":
