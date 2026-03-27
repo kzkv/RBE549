@@ -336,6 +336,26 @@ def SavePCDToFile(points_3d, colors, filename):
     print(f"  Saved {n} points to {filename}")
 
 
+def visualize_point_cloud(pcd_path):
+    """Load PCD and open interactive viewer for frontal and top-down screenshots."""
+    import open3d as o3d
+
+    pcd = o3d.io.read_point_cloud(pcd_path)
+    centroid = pcd.get_center()
+    print(f"  Loaded {len(pcd.points)} points, centroid: {centroid}")
+    print("  Opening interactive viewer...")
+    print("  Use mouse to orbit. Press 'P' to capture screenshot, 'Q' to quit.")
+    print("  Capture two views: frontal and top-down.")
+
+    vis = o3d.visualization.VisualizerWithKeyCallback()
+    vis.create_window(width=1280, height=720, window_name="SfM Point Cloud")
+    vis.add_geometry(pcd)
+    vis.get_render_option().point_size = 5.0
+    vis.get_render_option().background_color = np.array([0.1, 0.1, 0.1])
+    vis.run()
+    vis.destroy_window()
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
@@ -420,6 +440,12 @@ def main():
     print("=" * 60)
     colors = extract_colors(img_left, pts_left)
     SavePCDToFile(points_3d, colors, "point_cloud.pcd")
+
+    # Part 10: Open3D visualization
+    print("\n" + "=" * 60)
+    print("PART 10: Open3D Visualization")
+    print("=" * 60)
+    visualize_point_cloud("point_cloud.pcd")
 
 
 if __name__ == "__main__":
