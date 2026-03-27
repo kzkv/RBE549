@@ -222,6 +222,35 @@ def build_projection_matrices(K, R1, R2, T):
     return P0, candidates
 
 
+def LinearLSTriangulation(u0, P0, u1, P1):
+    """Triangulate a single 3D point from two views using the Linear-LS method (Hartley & Sturm, Section 5.1)."""
+    # Each view contributes two equations: (u * p3^T - p1^T) @ X = 0
+    # With X = (X, Y, Z, 1)^T, move the 4th column to RHS → A @ [X,Y,Z] = b
+    A = np.array([
+        u0[0] * P0[2, :3] - P0[0, :3],
+        u0[1] * P0[2, :3] - P0[1, :3],
+        u1[0] * P1[2, :3] - P1[0, :3],
+        u1[1] * P1[2, :3] - P1[1, :3],
+    ])
+    b = np.array([
+        -(u0[0] * P0[2, 3] - P0[0, 3]),
+        -(u0[1] * P0[2, 3] - P0[1, 3]),
+        -(u1[0] * P1[2, 3] - P1[0, 3]),
+        -(u1[1] * P1[2, 3] - P1[1, 3]),
+    ])
+    result, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+    return result
+
+
+def triangulate_points(pts_left, pts_right, P0, P1):
+    """Triangulate all point correspondences."""
+    points_3d = np.array([
+        LinearLSTriangulation(pl, P0, pr, P1)
+        for pl, pr in zip(pts_left, pts_right)
+    ])
+    return points_3d
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
