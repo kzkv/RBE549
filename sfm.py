@@ -1,5 +1,6 @@
 """Mini Structure-from-Motion pipeline."""
 
+import struct
 from pathlib import Path
 
 import cv2
@@ -9,13 +10,35 @@ IMAGE_LEFT = "capture_left.jpg"
 IMAGE_RIGHT = "capture_right.jpg"
 CALIBRATION_MATRIX = "camera_matrix.npy"
 DISTORTION_COEFFS = "dist_coeffs.npy"
+
+
 CHECKERBOARD_DIR = Path("data/checkerboard")
 CHECKERBOARD = (9, 6)
 SQUARE_SIZE_MM = 25.0
 CORNER_CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
 RECALIBRATE = False
+
+
 RATIO_THRESHOLD = 0.5
+
+
+FRONTAL_EXTRINSIC = np.array(
+    [
+        [0.9994459, -0.01668563, 0.02880063, -0.27385663],
+        [0.01978507, 0.99363172, -0.11092592, 0.39244263],
+        [-0.02676635, 0.11143428, 0.99341128, 0.91339497],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+)
+
+TOPDOWN_EXTRINSIC = np.array(
+    [
+        [0.98133378, -0.10538005, -0.16086969, 0.26462035],
+        [-0.14785562, 0.12147613, -0.98152038, 2.84310288],
+        [0.12297449, 0.9869846, 0.1036276, 3.49775039],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+)
 
 
 def calibrate_camera():
@@ -53,7 +76,6 @@ def calibrate_camera():
         obj_points, img_points, image_size, None, None
     )
 
-    # Per-image reprojection error
     errors = []
     for obj, img, rvec, tvec in zip(obj_points, img_points, rvecs, tvecs):
         projected, _ = cv2.projectPoints(obj, rvec, tvec, K, dist)
@@ -75,6 +97,14 @@ def load_calibration():
     K = np.load(CALIBRATION_MATRIX)
     dist = np.load(DISTORTION_COEFFS)
     return K, dist
+
+
+def load_and_undistort(path, K, dist):
+    """Load an image and remove lens distortion."""
+    image = cv2.imread(path)
+    if image is None:
+        raise FileNotFoundError(f"Could not load {path}")
+    return cv2.undistort(image, K, dist)
 
 
 def detect_and_match(img_left, img_right):
@@ -134,7 +164,6 @@ def draw_matches(img_left, img_right, kp_left, kp_right, matches):
     gray_left = to_grayscale_bgr(img_left)
     gray_right = to_grayscale_bgr(img_right)
 
-    # Horizontal: drawMatches side by side
     vis_h = cv2.drawMatches(
         gray_left,
         kp_left,
@@ -146,14 +175,14 @@ def draw_matches(img_left, img_right, kp_left, kp_right, matches):
     )
     cv2.imwrite("matches_horizontal.jpg", vis_h)
 
-    # Vertical: manual drawing on stacked images
-    h, w = gray_left.shape[:2]
+    h = gray_left.shape[0]
     vis_v = np.vstack([gray_left, gray_right])
+    rng = np.random.RandomState(42)
     for m in matches:
         pt_left = tuple(map(int, kp_left[m.queryIdx].pt))
         pt_right_raw = tuple(map(int, kp_right[m.trainIdx].pt))
         pt_right = (pt_right_raw[0], pt_right_raw[1] + h)
-        color = tuple(np.random.randint(0, 255, 3).tolist())
+        color = tuple(rng.randint(0, 255, 3).tolist())
         cv2.line(vis_v, pt_left, pt_right, color, 1)
         cv2.circle(vis_v, pt_left, 3, color, -1)
         cv2.circle(vis_v, pt_right, 3, color, -1)
@@ -173,12 +202,10 @@ def compute_fundamental_matrix(kp_left, kp_right, matches):
     inlier_mask = mask.ravel().astype(bool)
     pts_left = pts_left[inlier_mask]
     pts_right = pts_right[inlier_mask]
-    inlier_matches = [m for m, flag in zip(matches, inlier_mask) if flag]
 
-    print(f"  Inliers after RANSAC: {len(inlier_matches)}/{len(matches)}")
+    print(f"  Inliers after RANSAC: {inlier_mask.sum()}/{len(matches)}")
     print(f"  F:\n{F}")
 
-    # Verify epipolar constraint: q_R^T @ F @ q_L = 0
     ones = np.ones((len(pts_left), 1))
     homog_left = np.hstack([pts_left, ones])
     homog_right = np.hstack([pts_right, ones])
@@ -187,7 +214,7 @@ def compute_fundamental_matrix(kp_left, kp_right, matches):
     print(f"    Mean: {residuals.mean():.6f}")
     print(f"    Max:  {residuals.max():.6f}")
 
-    return F, pts_left, pts_right, inlier_matches
+    return F, pts_left, pts_right
 
 
 def compute_essential_matrix(F, K):
@@ -223,54 +250,52 @@ def build_projection_matrices(K, R1, R2, T):
 
 
 def LinearLSTriangulation(u0, P0, u1, P1):
-    """Triangulate a single 3D point from two views using the Linear-LS method (Hartley & Sturm, Section 5.1)."""
-    # Each view contributes two equations: (u * p3^T - p1^T) @ X = 0
-    # With X = (X, Y, Z, 1)^T, move the 4th column to RHS → A @ [X,Y,Z] = b
-    A = np.array([
-        u0[0] * P0[2, :3] - P0[0, :3],
-        u0[1] * P0[2, :3] - P0[1, :3],
-        u1[0] * P1[2, :3] - P1[0, :3],
-        u1[1] * P1[2, :3] - P1[1, :3],
-    ])
-    b = np.array([
-        -(u0[0] * P0[2, 3] - P0[0, 3]),
-        -(u0[1] * P0[2, 3] - P0[1, 3]),
-        -(u1[0] * P1[2, 3] - P1[0, 3]),
-        -(u1[1] * P1[2, 3] - P1[1, 3]),
-    ])
+    """Triangulate one 3D point via Linear-LS (Hartley & Sturm, Section 5.1)."""
+    A = np.array(
+        [
+            u0[0] * P0[2, :3] - P0[0, :3],
+            u0[1] * P0[2, :3] - P0[1, :3],
+            u1[0] * P1[2, :3] - P1[0, :3],
+            u1[1] * P1[2, :3] - P1[1, :3],
+        ]
+    )
+    b = np.array(
+        [
+            -(u0[0] * P0[2, 3] - P0[0, 3]),
+            -(u0[1] * P0[2, 3] - P0[1, 3]),
+            -(u1[0] * P1[2, 3] - P1[0, 3]),
+            -(u1[1] * P1[2, 3] - P1[1, 3]),
+        ]
+    )
     result, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
     return result
 
 
 def triangulate_points(pts_left, pts_right, P0, P1):
     """Triangulate all point correspondences."""
-    points_3d = np.array([
-        LinearLSTriangulation(pl, P0, pr, P1)
-        for pl, pr in zip(pts_left, pts_right)
-    ])
-    return points_3d
+    return np.array(
+        [LinearLSTriangulation(pl, P0, pr, P1) for pl, pr in zip(pts_left, pts_right)]
+    )
 
 
 def cheirality_check(pts_left, pts_right, P0, P1_candidates, R1, R2, T):
-    """Triangulate with each P1 candidate, select the one with most points in front of both cameras."""
-    extrinsics = [
-        (R1, T), (R1, -T), (R2, T), (R2, -T),
-    ]
+    """Select the P1 candidate that places the most points in front of both cameras."""
+    extrinsics = [(R1, T), (R1, -T), (R2, T), (R2, -T)]
 
     best_idx, best_count, best_points = 0, 0, None
     for i, (P1, (R, t)) in enumerate(zip(P1_candidates, extrinsics)):
         points_3d = triangulate_points(pts_left, pts_right, P0, P1)
 
-        # Depth in camera 0: Z > 0
         depth_cam0 = points_3d[:, 2]
 
-        # Depth in camera 1: third row of R @ X + t
         homog = np.hstack([points_3d, np.ones((len(points_3d), 1))])
         Rt = np.hstack([R, t])
         depth_cam1 = (Rt @ homog.T)[2]
 
         in_front = np.sum((depth_cam0 > 0) & (depth_cam1 > 0))
-        print(f"  Candidate {i + 1}: {in_front}/{len(points_3d)} points in front of both cameras")
+        print(
+            f"  Candidate {i + 1}: {in_front}/{len(points_3d)} points in front of both cameras"
+        )
 
         if in_front > best_count:
             best_idx, best_count, best_points = i, in_front, points_3d
@@ -294,7 +319,6 @@ def compute_reprojection_error(points_3d, pts_left, pts_right, P0, P1):
     print(f"  Camera 0: mean={errors0.mean():.4f} px, max={errors0.max():.4f} px")
     print(f"  Camera 1: mean={errors1.mean():.4f} px, max={errors1.max():.4f} px")
     print(f"  Overall:  mean={(errors0.mean() + errors1.mean()) / 2:.4f} px")
-    return errors0, errors1
 
 
 def extract_colors(img, pts):
@@ -312,8 +336,6 @@ def extract_colors(img, pts):
 
 def SavePCDToFile(points_3d, colors, filename):
     """Save 3D points with RGB color to an ASCII PCD file."""
-    import struct
-
     n = len(points_3d)
     header = (
         f"VERSION .7\n"
@@ -330,25 +352,11 @@ def SavePCDToFile(points_3d, colors, filename):
     with open(filename, "w") as f:
         f.write(header)
         for pt, (r, g, b) in zip(points_3d, colors):
-            rgb_packed = struct.unpack("f", struct.pack("I", (int(r) << 16) | (int(g) << 8) | int(b)))[0]
+            rgb_int = (int(r) << 16) | (int(g) << 8) | int(b)
+            rgb_packed = struct.unpack("f", struct.pack("I", rgb_int))[0]
             f.write(f"{pt[0]:.6f} {pt[1]:.6f} {pt[2]:.6f} {rgb_packed:.8e}\n")
 
     print(f"  Saved {n} points to {filename}")
-
-
-FRONTAL_EXTRINSIC = np.array([
-    [ 0.9994459 , -0.01668563,  0.02880063, -0.27385663],
-    [ 0.01978507,  0.99363172, -0.11092592,  0.39244263],
-    [-0.02676635,  0.11143428,  0.99341128,  0.91339497],
-    [ 0.        ,  0.        ,  0.        ,  1.        ],
-])
-
-TOPDOWN_EXTRINSIC = np.array([
-    [ 0.98133378, -0.10538005, -0.16086969,  0.26462035],
-    [-0.14785562,  0.12147613, -0.98152038,  2.84310288],
-    [ 0.12297449,  0.9869846 ,  0.1036276 ,  3.49775039],
-    [ 0.        ,  0.        ,  0.        ,  1.        ],
-])
 
 
 def save_static_views(pcd, width=1280, height=720):
@@ -359,8 +367,10 @@ def save_static_views(pcd, width=1280, height=720):
         width, height, width, width, width / 2, height / 2
     )
 
-    for filename, extrinsic in [("view_frontal.png", FRONTAL_EXTRINSIC),
-                                 ("view_topdown.png", TOPDOWN_EXTRINSIC)]:
+    for filename, extrinsic in [
+        ("view_frontal.png", FRONTAL_EXTRINSIC),
+        ("view_topdown.png", TOPDOWN_EXTRINSIC),
+    ]:
         cam = o3d.camera.PinholeCameraParameters()
         cam.intrinsic = intrinsic
         cam.extrinsic = extrinsic
@@ -411,95 +421,48 @@ def visualize_point_cloud(pcd_path):
     vis.destroy_window()
 
 
-def load_and_undistort(path, K, dist):
-    """Load an image and remove lens distortion."""
-    image = cv2.imread(path)
-    if image is None:
-        raise FileNotFoundError(f"Could not load {path}")
-    return cv2.undistort(image, K, dist)
-
-
 def main():
-    # Part 0: Camera calibration
-    print("=" * 60)
-    print("PART 0: Camera Calibration")
-    print("=" * 60)
+    print("Part 0: Camera Calibration")
     if RECALIBRATE:
         K, dist = calibrate_camera()
     else:
         K, dist = load_calibration()
-        print(f"  Loaded K from {CALIBRATION_MATRIX}")
-        print(f"  K:\n{K}")
+        print(f"K:\n{K}")
 
-    # Load and undistort stereo pair
-    print(f"\nUndistorting {IMAGE_LEFT} and {IMAGE_RIGHT}...")
     img_left = load_and_undistort(IMAGE_LEFT, K, dist)
     img_right = load_and_undistort(IMAGE_RIGHT, K, dist)
-    print(f"  Left image:  {img_left.shape}")
-    print(f"  Right image: {img_right.shape}")
 
-    # Parts 1-2: Feature extraction and matching
-    print("\n" + "=" * 60)
-    print("PARTS 1-2: Feature Extraction & Matching")
-    print("=" * 60)
+    print("\nParts 1-2: Feature Extraction & Matching")
     kp_left, kp_right, matches = detect_and_match(img_left, img_right)
     draw_features(img_left, img_right, kp_left, kp_right)
     draw_matches(img_left, img_right, kp_left, kp_right, matches)
 
-    # Part 3: Fundamental matrix
-    print("\n" + "=" * 60)
-    print("PART 3: Fundamental Matrix")
-    print("=" * 60)
-    F, pts_left, pts_right, inlier_matches = compute_fundamental_matrix(
-        kp_left, kp_right, matches
-    )
+    print("\nPart 3: Fundamental Matrix")
+    F, pts_left, pts_right = compute_fundamental_matrix(kp_left, kp_right, matches)
 
-    # Part 4: Essential matrix
-    print("\n" + "=" * 60)
-    print("PART 4: Essential Matrix")
-    print("=" * 60)
+    print("\nPart 4: Essential Matrix")
     E = compute_essential_matrix(F, K)
 
-    # Part 5: Recover R and T
-    print("\n" + "=" * 60)
-    print("PART 5: Decompose Essential Matrix")
-    print("=" * 60)
+    print("\nPart 5: Decompose Essential Matrix")
     R1, R2, T = decompose_essential(E)
 
-    # Parts 6-6.5: Projection matrices
-    print("\n" + "=" * 60)
-    print("PARTS 6-6.5: Projection Matrices")
-    print("=" * 60)
+    print("\nParts 6-6.5: Projection Matrices")
     P0, P1_candidates = build_projection_matrices(K, R1, R2, T)
 
-    # Parts 7-7.5: Triangulation and cheirality check
-    print("\n" + "=" * 60)
-    print("PARTS 7-7.5: Triangulation & Cheirality Check")
-    print("=" * 60)
+    print("\nParts 7-7.5: Triangulation & Cheirality Check")
     points_3d, best_idx = cheirality_check(
         pts_left, pts_right, P0, P1_candidates, R1, R2, T
     )
     P1 = P1_candidates[best_idx]
 
-    # Part 8: Reprojection error
-    print("\n" + "=" * 60)
-    print("PART 8: Reprojection Error")
-    print("=" * 60)
-    errors0, errors1 = compute_reprojection_error(
-        points_3d, pts_left, pts_right, P0, P1
-    )
+    print("\nPart 8: Reprojection Error")
+    compute_reprojection_error(points_3d, pts_left, pts_right, P0, P1)
 
-    # Part 9: Save colored point cloud
-    print("\n" + "=" * 60)
-    print("PART 9: Save Point Cloud")
-    print("=" * 60)
+    print("\nPart 9: Save Point Cloud")
     colors = extract_colors(img_left, pts_left)
     SavePCDToFile(points_3d, colors, "point_cloud.pcd")
 
-    # Part 10: Open3D visualization
-    print("\n" + "=" * 60)
-    print("PART 10: Open3D Visualization")
-    print("=" * 60)
+    print("\nPart 10: Open3D Visualization")
     visualize_point_cloud("point_cloud.pcd")
 
 
