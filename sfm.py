@@ -207,6 +207,21 @@ def decompose_essential(E):
     return R1, R2, T
 
 
+def build_projection_matrices(K, R1, R2, T):
+    """Form P0 and four candidate P1 matrices."""
+    P0 = K @ np.hstack([np.eye(3), np.zeros((3, 1))])
+    candidates = [
+        K @ np.hstack([R1, T]),
+        K @ np.hstack([R1, -T]),
+        K @ np.hstack([R2, T]),
+        K @ np.hstack([R2, -T]),
+    ]
+    print(f"  P0:\n{P0}")
+    for i, P1 in enumerate(candidates):
+        print(f"  P1 candidate {i + 1}:\n{P1}")
+    return P0, candidates
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
@@ -261,6 +276,12 @@ def main():
     print("PART 5: Decompose Essential Matrix")
     print("=" * 60)
     R1, R2, T = decompose_essential(E)
+
+    # Parts 6-6.5: Projection matrices
+    print("\n" + "=" * 60)
+    print("PARTS 6-6.5: Projection Matrices")
+    print("=" * 60)
+    P0, P1_candidates = build_projection_matrices(K, R1, R2, T)
 
 
 if __name__ == "__main__":
