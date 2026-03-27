@@ -297,6 +297,45 @@ def compute_reprojection_error(points_3d, pts_left, pts_right, P0, P1):
     return errors0, errors1
 
 
+def extract_colors(img, pts):
+    """Sample BGR pixel color at each feature location, return as RGB."""
+    colors = []
+    h, w = img.shape[:2]
+    for pt in pts:
+        x, y = int(round(pt[0])), int(round(pt[1]))
+        x = np.clip(x, 0, w - 1)
+        y = np.clip(y, 0, h - 1)
+        b, g, r = img[y, x]
+        colors.append((r, g, b))
+    return np.array(colors, dtype=np.uint8)
+
+
+def SavePCDToFile(points_3d, colors, filename):
+    """Save 3D points with RGB color to an ASCII PCD file."""
+    import struct
+
+    n = len(points_3d)
+    header = (
+        f"VERSION .7\n"
+        f"FIELDS x y z rgb\n"
+        f"SIZE 4 4 4 4\n"
+        f"TYPE F F F F\n"
+        f"COUNT 1 1 1 1\n"
+        f"WIDTH {n}\n"
+        f"HEIGHT 1\n"
+        f"VIEWPOINT 0 0 0 1 0 0 0\n"
+        f"POINTS {n}\n"
+        f"DATA ascii\n"
+    )
+    with open(filename, "w") as f:
+        f.write(header)
+        for pt, (r, g, b) in zip(points_3d, colors):
+            rgb_packed = struct.unpack("f", struct.pack("I", (int(r) << 16) | (int(g) << 8) | int(b)))[0]
+            f.write(f"{pt[0]:.6f} {pt[1]:.6f} {pt[2]:.6f} {rgb_packed:.8e}\n")
+
+    print(f"  Saved {n} points to {filename}")
+
+
 def load_and_undistort(path, K, dist):
     """Load an image and remove lens distortion."""
     image = cv2.imread(path)
@@ -374,6 +413,13 @@ def main():
     errors0, errors1 = compute_reprojection_error(
         points_3d, pts_left, pts_right, P0, P1
     )
+
+    # Part 9: Save colored point cloud
+    print("\n" + "=" * 60)
+    print("PART 9: Save Point Cloud")
+    print("=" * 60)
+    colors = extract_colors(img_left, pts_left)
+    SavePCDToFile(points_3d, colors, "point_cloud.pcd")
 
 
 if __name__ == "__main__":
