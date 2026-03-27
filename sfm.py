@@ -336,22 +336,77 @@ def SavePCDToFile(points_3d, colors, filename):
     print(f"  Saved {n} points to {filename}")
 
 
+FRONTAL_EXTRINSIC = np.array([
+    [ 0.9994459 , -0.01668563,  0.02880063, -0.27385663],
+    [ 0.01978507,  0.99363172, -0.11092592,  0.39244263],
+    [-0.02676635,  0.11143428,  0.99341128,  0.91339497],
+    [ 0.        ,  0.        ,  0.        ,  1.        ],
+])
+
+TOPDOWN_EXTRINSIC = np.array([
+    [ 0.98133378, -0.10538005, -0.16086969,  0.26462035],
+    [-0.14785562,  0.12147613, -0.98152038,  2.84310288],
+    [ 0.12297449,  0.9869846 ,  0.1036276 ,  3.49775039],
+    [ 0.        ,  0.        ,  0.        ,  1.        ],
+])
+
+
+def save_static_views(pcd, width=1280, height=720):
+    """Save frontal and top-down screenshots from fixed camera poses."""
+    import open3d as o3d
+
+    intrinsic = o3d.camera.PinholeCameraIntrinsic(
+        width, height, width, width, width / 2, height / 2
+    )
+
+    for filename, extrinsic in [("view_frontal.png", FRONTAL_EXTRINSIC),
+                                 ("view_topdown.png", TOPDOWN_EXTRINSIC)]:
+        cam = o3d.camera.PinholeCameraParameters()
+        cam.intrinsic = intrinsic
+        cam.extrinsic = extrinsic
+
+        vis = o3d.visualization.Visualizer()
+        vis.create_window(width=width, height=height, visible=False)
+        vis.add_geometry(pcd)
+        vis.get_render_option().point_size = 5.0
+        vis.get_render_option().background_color = np.array([0.1, 0.1, 0.1])
+
+        ctl = vis.get_view_control()
+        ctl.convert_from_pinhole_camera_parameters(cam, allow_arbitrary=True)
+
+        for _ in range(30):
+            vis.poll_events()
+            vis.update_renderer()
+
+        vis.capture_screen_image(filename)
+        vis.destroy_window()
+        print(f"  Saved {filename}")
+
+
 def visualize_point_cloud(pcd_path):
-    """Load PCD and open interactive viewer for frontal and top-down screenshots."""
+    """Save static views and open interactive viewer starting at frontal pose."""
     import open3d as o3d
 
     pcd = o3d.io.read_point_cloud(pcd_path)
-    centroid = pcd.get_center()
-    print(f"  Loaded {len(pcd.points)} points, centroid: {centroid}")
-    print("  Opening interactive viewer...")
-    print("  Use mouse to orbit. Press 'P' to capture screenshot, 'Q' to quit.")
-    print("  Capture two views: frontal and top-down.")
+    print(f"  Loaded {len(pcd.points)} points")
 
-    vis = o3d.visualization.VisualizerWithKeyCallback()
+    save_static_views(pcd)
+
+    intrinsic = o3d.camera.PinholeCameraIntrinsic(1280, 720, 1280, 1280, 640, 360)
+    cam = o3d.camera.PinholeCameraParameters()
+    cam.intrinsic = intrinsic
+    cam.extrinsic = FRONTAL_EXTRINSIC
+
+    print("  Opening interactive viewer (Q to quit)...")
+    vis = o3d.visualization.Visualizer()
     vis.create_window(width=1280, height=720, window_name="SfM Point Cloud")
     vis.add_geometry(pcd)
     vis.get_render_option().point_size = 5.0
     vis.get_render_option().background_color = np.array([0.1, 0.1, 0.1])
+
+    ctl = vis.get_view_control()
+    ctl.convert_from_pinhole_camera_parameters(cam, allow_arbitrary=True)
+
     vis.run()
     vis.destroy_window()
 
