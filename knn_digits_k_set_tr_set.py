@@ -1,4 +1,5 @@
-"""KNN digit recognition -- sweep k=[1..9] and train splits [10%..90%], plot all."""
+# Tom Kazakov
+# RBE 549 Lab 10: KNN digit recognition, all k values x all train/test splits
 
 import cv2
 import numpy as np

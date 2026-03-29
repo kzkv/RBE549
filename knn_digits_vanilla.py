@@ -1,4 +1,5 @@
-"""KNN digit recognition on OpenCV digits.png -- vanilla baseline (k=5, 50/50 split)."""
+# Tom Kazakov
+# RBE 549 Lab 10: KNN digit recognition, vanilla baseline (k=5, 50/50 split)
 
 import cv2
 import numpy as np

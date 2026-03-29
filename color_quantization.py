@@ -1,4 +1,5 @@
-"""Color quantization using K-Means clustering on nature.png."""
+# Tom Kazakov
+# RBE 549 Lab 10: Color quantization using K-Means clustering
 
 import cv2
 import numpy as np

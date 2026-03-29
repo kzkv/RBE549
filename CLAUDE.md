@@ -33,6 +33,7 @@ Each weekly assignment follows this sequence:
 
 ## Code Style (Python, project-specific)
 
+- Every Python file starts with a two-line comment header: `# Tom Kazakov` then `# RBE 549 Lab N: <description>`. No docstring module header.
 - Single-line comments only at module level (section dividers, constant explanations).
 - Docstrings: one sentence. No args/returns blocks. No multi-line elaboration.
 - No inline comments explaining obvious code. If the code needs a comment to be understood, refactor the code.

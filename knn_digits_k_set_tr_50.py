@@ -1,4 +1,5 @@
-"""KNN digit recognition -- sweep k=[1..9] at 50/50 split, plot accuracy."""
+# Tom Kazakov
+# RBE 549 Lab 10: KNN digit recognition, k=[1..9] sweep at 50/50 split
 
 import cv2
 import numpy as np

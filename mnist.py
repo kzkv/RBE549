@@ -1,4 +1,5 @@
-"""MNIST classification with TF/Keras -- sequential, functional, subclassing APIs."""
+# Tom Kazakov
+# RBE 549 Lab 10: MNIST classification with TF/Keras (sequential, functional, subclassing)
 
 import os
 
