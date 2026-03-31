@@ -71,6 +71,35 @@ def build_model():
     return model, base_model
 
 
+def plot_training(history, history_fine):
+    """Plot accuracy and loss for both training phases."""
+    acc = history.history["accuracy"] + history_fine.history["accuracy"]
+    val_acc = history.history["val_accuracy"] + history_fine.history["val_accuracy"]
+    loss = history.history["loss"] + history_fine.history["loss"]
+    val_loss = history.history["val_loss"] + history_fine.history["val_loss"]
+    epochs = range(1, len(acc) + 1)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax1.plot(epochs, acc, label="Training")
+    ax1.plot(epochs, val_acc, label="Validation")
+    ax1.axvline(INITIAL_EPOCHS, color="gray", linestyle="--", label="Fine-tuning start")
+    ax1.set_title("Accuracy")
+    ax1.set_xlabel("Epoch")
+    ax1.legend()
+
+    ax2.plot(epochs, loss, label="Training")
+    ax2.plot(epochs, val_loss, label="Validation")
+    ax2.axvline(INITIAL_EPOCHS, color="gray", linestyle="--", label="Fine-tuning start")
+    ax2.set_title("Loss")
+    ax2.set_xlabel("Epoch")
+    ax2.legend()
+
+    plt.tight_layout()
+    plt.savefig("mobilenet_training.png", dpi=150)
+    plt.show()
+
+
 def fine_tune(model, base_model):
     """Unfreeze top layers of the base model and retrain at a lower learning rate."""
     base_model.trainable = True
@@ -100,3 +129,8 @@ if __name__ == "__main__":
         initial_epoch=INITIAL_EPOCHS,
         validation_data=val_ds,
     )
+
+    plot_training(history, history_fine)
+
+    loss, accuracy = model.evaluate(test_ds)
+    print(f"Test accuracy: {accuracy:.4f}")
