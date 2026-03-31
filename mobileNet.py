@@ -12,6 +12,8 @@ AUTOTUNE = tf.data.AUTOTUNE
 
 BASE_LEARNING_RATE = 0.0001
 INITIAL_EPOCHS = 10
+FINE_TUNE_EPOCHS = 10
+FINE_TUNE_AT = 100
 
 DATASET_DIR = os.path.join(os.path.dirname(__file__), "data", "cats_and_dogs_filtered")
 
@@ -69,9 +71,32 @@ def build_model():
     return model, base_model
 
 
+def fine_tune(model, base_model):
+    """Unfreeze top layers of the base model and retrain at a lower learning rate."""
+    base_model.trainable = True
+    for layer in base_model.layers[:FINE_TUNE_AT]:
+        layer.trainable = False
+
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=BASE_LEARNING_RATE / 10),
+        loss=tf.keras.losses.BinaryCrossentropy(),
+        metrics=[tf.keras.metrics.BinaryAccuracy(threshold=0.5, name="accuracy")],
+    )
+    return model
+
+
 if __name__ == "__main__":
     train_ds, val_ds, test_ds = load_data()
     model, base_model = build_model()
     model.summary()
 
     history = model.fit(train_ds, epochs=INITIAL_EPOCHS, validation_data=val_ds)
+
+    model = fine_tune(model, base_model)
+    total_epochs = INITIAL_EPOCHS + FINE_TUNE_EPOCHS
+    history_fine = model.fit(
+        train_ds,
+        epochs=total_epochs,
+        initial_epoch=INITIAL_EPOCHS,
+        validation_data=val_ds,
+    )
