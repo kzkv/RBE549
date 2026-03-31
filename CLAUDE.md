@@ -23,6 +23,7 @@ Each weekly assignment follows this sequence:
 - Never bundle multiple increments. One concept, one function, one commit.
 - Never auto-commit or suggest committing. The student commits when ready.
 - The Critic notes observations for the lab report in memory (`week{N}-report-notes.md`).
+- When creating a new file, immediately `git add` it so it is tracked.
 
 ## General Rules
 
