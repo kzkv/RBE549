@@ -16,13 +16,16 @@ EPOCHS = 20
 
 DATASET_DIR = os.path.join(os.path.dirname(__file__), "data", "MerchData")
 
-data_augmentation = tf.keras.Sequential(
-    [
-        tf.keras.layers.RandomFlip("horizontal"),
-        tf.keras.layers.RandomRotation(0.2),
-        tf.keras.layers.RandomZoom(0.2),
-    ]
-)
+
+def make_augmentation():
+    """Create a fresh augmentation pipeline (avoids input shape caching)."""
+    return tf.keras.Sequential(
+        [
+            tf.keras.layers.RandomFlip("horizontal"),
+            tf.keras.layers.RandomRotation(0.2),
+            tf.keras.layers.RandomZoom(0.2),
+        ]
+    )
 
 
 def load_data(img_size):
@@ -62,7 +65,34 @@ def build_vgg19_model():
     base_model.trainable = False
 
     inputs = tf.keras.Input(shape=img_shape)
-    x = data_augmentation(inputs)
+    x = make_augmentation()(inputs)
+    x = preprocess(x)
+    x = base_model(x, training=False)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    outputs = tf.keras.layers.Dense(NUM_CLASSES, activation="softmax")(x)
+
+    model = tf.keras.Model(inputs, outputs)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
+        loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+        metrics=["accuracy"],
+    )
+    return model
+
+
+def build_inception_model():
+    """Build a frozen Inception-V3 feature extractor with a classification head."""
+    img_shape = (299, 299, 3)
+    preprocess = tf.keras.applications.inception_v3.preprocess_input
+
+    base_model = tf.keras.applications.InceptionV3(
+        input_shape=img_shape, include_top=False, weights="imagenet"
+    )
+    base_model.trainable = False
+
+    inputs = tf.keras.Input(shape=img_shape)
+    x = make_augmentation()(inputs)
     x = preprocess(x)
     x = base_model(x, training=False)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
@@ -114,3 +144,13 @@ if __name__ == "__main__":
     vgg_model.summary()
     vgg_history = vgg_model.fit(train_ds, epochs=EPOCHS, validation_data=val_ds)
     plot_training(vgg_history, "VGG-19", "merch_vgg19.png")
+
+    print("\n=== Inception-V3 ===")
+    train_ds, val_ds, class_names = load_data((299, 299))
+
+    inception_model = build_inception_model()
+    inception_model.summary()
+    inception_history = inception_model.fit(
+        train_ds, epochs=EPOCHS, validation_data=val_ds
+    )
+    plot_training(inception_history, "Inception-V3", "merch_inception.png")
