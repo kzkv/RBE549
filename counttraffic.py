@@ -9,30 +9,17 @@ from ultralytics import YOLO
 VIDEO_PATH = "TrafficVideo.mp4"
 MODEL_PATH = "yolo11n.pt"
 WINDOW_NAME = "Traffic Monitor"
-CROSSWALK_ZONE = np.array([(623, 853), (1297, 606), (1681, 629), (1432, 966)])
-CROSSWALK_COLOR = (0, 255, 255)
-CROSSWALK_ALPHA = 0.3
+START_FRAME = 700
 CONFIDENCE_THRESHOLD = 0.4
+EXIT_DEBOUNCE_FRAMES = 5
+
 TARGET_CLASSES = {0: "human", 1: "bike", 2: "car"}
 BOX_COLORS = {0: (0, 0, 255), 1: (0, 255, 0), 2: (255, 0, 255)}
-START_FRAME = 700
-EXIT_DEBOUNCE_FRAMES = 5
-CROSSWALK_ZONE_F32 = None
 
-
-def is_inside_zone(point):
-    """Test if a point is inside the crosswalk polygon."""
-    global CROSSWALK_ZONE_F32
-    if CROSSWALK_ZONE_F32 is None:
-        CROSSWALK_ZONE_F32 = CROSSWALK_ZONE.astype(np.float32)
-    return cv2.pointPolygonTest(CROSSWALK_ZONE_F32, point, False) >= 0
-
-
-def bottom_center(xyxy):
-    """Return the bottom-center point of an xyxy bounding box."""
-    x1, _, x2, y2 = xyxy
-    return ((x1 + x2) / 2.0, float(y2))
-
+CROSSWALK_ZONE = np.array([(623, 853), (1297, 606), (1681, 629), (1432, 966)])
+CROSSWALK_ZONE_F32 = CROSSWALK_ZONE.astype(np.float32)
+CROSSWALK_COLOR = (0, 255, 255)
+CROSSWALK_ALPHA = 0.3
 
 EDGE_DIRECTIONS = {
     "through traffic": [
@@ -44,6 +31,17 @@ EDGE_DIRECTIONS = {
         (CROSSWALK_ZONE[3], CROSSWALK_ZONE[0]),
     ],
 }
+
+
+def bottom_center(xyxy):
+    """Return the bottom-center point of an xyxy bounding box."""
+    x1, _, x2, y2 = xyxy
+    return ((x1 + x2) / 2.0, float(y2))
+
+
+def is_inside_zone(point):
+    """Test if a point is inside the crosswalk polygon."""
+    return cv2.pointPolygonTest(CROSSWALK_ZONE_F32, point, False) >= 0
 
 
 def segments_intersect(p1, p2, p3, p4):
@@ -64,54 +62,90 @@ def classify_direction(p1, p2):
     return "through traffic"
 
 
-def update_crossings(
-    frame_number,
-    detections,
-    track_inside,
-    track_entry,
-    track_last,
-    track_outside_count,
-    counted,
-    crossing_counts,
-):
-    """Track zone entry/exit with debounce and count crossings."""
-    for track_id, cls_id, xyxy in detections:
-        bc = bottom_center(xyxy)
-        inside = is_inside_zone(bc)
-        was_inside = track_inside.get(track_id)
-
-        if inside:
-            track_outside_count.pop(track_id, None)
-            if was_inside is None or not was_inside:
-                track_entry[track_id] = bc
-                print(
-                    f"[{frame_number}] #{track_id} {TARGET_CLASSES[cls_id]} ENTERED at {bc}"
-                )
-            track_last[track_id] = bc
-            track_inside[track_id] = True
-        else:
-            if was_inside:
-                track_outside_count[track_id] = track_outside_count.get(track_id, 0) + 1
-                if track_outside_count[track_id] >= EXIT_DEBOUNCE_FRAMES:
-                    print(
-                        f"[{frame_number}] #{track_id} {TARGET_CLASSES[cls_id]} EXITED at {bc}"
-                    )
-                    track_inside[track_id] = False
-                    track_outside_count.pop(track_id, None)
-                    if track_id in track_entry and track_id not in counted:
-                        last_inside = track_last.get(track_id, track_entry[track_id])
-                        direction = classify_direction(last_inside, bc)
-                        counted.add(track_id)
-                        class_name = TARGET_CLASSES[cls_id]
-                        crossing_counts[(class_name, direction)] += 1
-                        print(f"  -> COUNTED as {class_name} {direction}")
-            else:
-                track_inside[track_id] = False
-
-
 def put_text(frame, text, x, y, scale=0.5, color=(255, 255, 255)):
     """Draw text on the frame."""
     cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2)
+
+
+def filter_target_boxes(boxes):
+    """Return list of (track_id, cls_id, xyxy) for tracked target objects above confidence."""
+    return [
+        (int(box.id), int(box.cls), tuple(map(int, box.xyxy[0])))
+        for box in boxes
+        if box.id is not None
+        and int(box.cls) in TARGET_CLASSES
+        and float(box.conf) >= CONFIDENCE_THRESHOLD
+    ]
+
+
+class CrossingTracker:
+    """Tracks objects entering and exiting the crosswalk zone with debounce."""
+
+    def __init__(self):
+        self.inside = {}
+        self.entry = {}
+        self.last_inside = {}
+        self.outside_count = {}
+        self.counted = set()
+        self.counts = defaultdict(int)
+
+    def update(self, frame_number, detections):
+        """Process one frame of detections."""
+        for track_id, cls_id, xyxy in detections:
+            bc = bottom_center(xyxy)
+            currently_inside = is_inside_zone(bc)
+            was_inside = self.inside.get(track_id)
+
+            if currently_inside:
+                self._handle_inside(frame_number, track_id, cls_id, bc, was_inside)
+            else:
+                self._handle_outside(frame_number, track_id, cls_id, bc, was_inside)
+
+    def _handle_inside(self, frame_number, track_id, cls_id, bc, was_inside):
+        self.outside_count.pop(track_id, None)
+        if not was_inside:
+            self.entry[track_id] = bc
+            print(
+                f"[{frame_number}] #{track_id} {TARGET_CLASSES[cls_id]} ENTERED at {bc}"
+            )
+        self.last_inside[track_id] = bc
+        self.inside[track_id] = True
+
+    def _handle_outside(self, frame_number, track_id, cls_id, bc, was_inside):
+        if not was_inside:
+            self.inside[track_id] = False
+            return
+        self.outside_count[track_id] = self.outside_count.get(track_id, 0) + 1
+        if self.outside_count[track_id] < EXIT_DEBOUNCE_FRAMES:
+            return
+        print(f"[{frame_number}] #{track_id} {TARGET_CLASSES[cls_id]} EXITED at {bc}")
+        self.inside[track_id] = False
+        self.outside_count.pop(track_id, None)
+        if track_id in self.entry and track_id not in self.counted:
+            origin = self.last_inside.get(track_id, self.entry[track_id])
+            direction = classify_direction(origin, bc)
+            self.counted.add(track_id)
+            self.counts[(TARGET_CLASSES[cls_id], direction)] += 1
+            print(f"  -> COUNTED as {TARGET_CLASSES[cls_id]} {direction}")
+
+
+def draw_detections(frame, detections):
+    """Draw bounding boxes with track IDs."""
+    for track_id, cls_id, xyxy in detections:
+        x1, y1, x2, y2 = xyxy
+        color = BOX_COLORS[cls_id]
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        put_text(
+            frame, f"{TARGET_CLASSES[cls_id]} #{track_id}", x1, y1 - 8, color=color
+        )
+
+
+def draw_crosswalk(frame):
+    """Draw the crosswalk zone as a semi-transparent overlay."""
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [CROSSWALK_ZONE], CROSSWALK_COLOR)
+    cv2.addWeighted(overlay, CROSSWALK_ALPHA, frame, 1 - CROSSWALK_ALPHA, 0, frame)
+    cv2.polylines(frame, [CROSSWALK_ZONE], True, CROSSWALK_COLOR, 2)
 
 
 def draw_hud(frame, crossing_counts):
@@ -131,33 +165,6 @@ def draw_hud(frame, crossing_counts):
         y += 10
 
 
-def filter_target_boxes(boxes):
-    """Return list of (track_id, cls_id, xyxy) for tracked target objects above confidence."""
-    result = []
-    for box in boxes:
-        cls_id = int(box.cls)
-        if cls_id not in TARGET_CLASSES:
-            continue
-        if float(box.conf) < CONFIDENCE_THRESHOLD:
-            continue
-        if box.id is None:
-            continue
-        track_id = int(box.id)
-        xyxy = tuple(map(int, box.xyxy[0]))
-        result.append((track_id, cls_id, xyxy))
-    return result
-
-
-def draw_detections(frame, detections):
-    """Draw bounding boxes with track IDs."""
-    for track_id, cls_id, xyxy in detections:
-        x1, y1, x2, y2 = xyxy
-        color = BOX_COLORS[cls_id]
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        label = f"{TARGET_CLASSES[cls_id]} #{track_id}"
-        put_text(frame, label, x1, y1 - 8, color=color)
-
-
 def main():
     model = YOLO(MODEL_PATH)
     cap = cv2.VideoCapture(VIDEO_PATH)
@@ -168,13 +175,7 @@ def main():
     if START_FRAME > 0:
         cap.set(cv2.CAP_PROP_POS_FRAMES, START_FRAME)
     frame_number = START_FRAME
-
-    track_inside = {}
-    track_entry = {}
-    track_last = {}
-    track_outside_count = {}
-    counted = set()
-    crossing_counts = defaultdict(int)
+    tracker = CrossingTracker()
 
     while True:
         ret, frame = cap.read()
@@ -183,28 +184,12 @@ def main():
         frame_number += 1
 
         results = model.track(frame, persist=True, verbose=False)
-        boxes = results[0].boxes
-        detections = filter_target_boxes(boxes)
+        detections = filter_target_boxes(results[0].boxes)
 
-        update_crossings(
-            frame_number,
-            detections,
-            track_inside,
-            track_entry,
-            track_last,
-            track_outside_count,
-            counted,
-            crossing_counts,
-        )
+        tracker.update(frame_number, detections)
         draw_detections(frame, detections)
-
-        overlay = frame.copy()
-        cv2.fillPoly(overlay, [CROSSWALK_ZONE], CROSSWALK_COLOR)
-        cv2.addWeighted(overlay, CROSSWALK_ALPHA, frame, 1 - CROSSWALK_ALPHA, 0, frame)
-        cv2.polylines(frame, [CROSSWALK_ZONE], True, CROSSWALK_COLOR, 2)
-
-        draw_hud(frame, crossing_counts)
-
+        draw_crosswalk(frame)
+        draw_hud(frame, tracker.counts)
         put_text(
             frame,
             f"{frame_number}/{total_frames}",
