@@ -15,7 +15,8 @@ CROSSWALK_ALPHA = 0.3
 CONFIDENCE_THRESHOLD = 0.4
 TARGET_CLASSES = {0: "human", 1: "bike", 2: "car"}
 BOX_COLORS = {0: (0, 0, 255), 1: (0, 255, 0), 2: (255, 0, 255)}
-START_FRAME = 0
+START_FRAME = 700
+EXIT_DEBOUNCE_FRAMES = 5
 CROSSWALK_ZONE_F32 = None
 
 
@@ -64,31 +65,48 @@ def classify_direction(p1, p2):
 
 
 def update_crossings(
-    detections, track_inside, track_entry, track_last, counted, crossing_counts
+    frame_number,
+    detections,
+    track_inside,
+    track_entry,
+    track_last,
+    track_outside_count,
+    counted,
+    crossing_counts,
 ):
-    """Track zone entry/exit and count crossings."""
+    """Track zone entry/exit with debounce and count crossings."""
     for track_id, cls_id, xyxy in detections:
         bc = bottom_center(xyxy)
         inside = is_inside_zone(bc)
         was_inside = track_inside.get(track_id)
 
-        if was_inside is None and inside:
-            track_entry[track_id] = bc
-        elif was_inside is None and not inside:
-            pass
-        elif inside and not was_inside:
-            track_entry[track_id] = bc
-        elif not inside and was_inside and track_id in track_entry:
-            if track_id not in counted:
-                last_inside = track_last.get(track_id, track_entry[track_id])
-                direction = classify_direction(last_inside, bc)
-                counted.add(track_id)
-                class_name = TARGET_CLASSES[cls_id]
-                crossing_counts[(class_name, direction)] += 1
-
         if inside:
+            track_outside_count.pop(track_id, None)
+            if was_inside is None or not was_inside:
+                track_entry[track_id] = bc
+                print(
+                    f"[{frame_number}] #{track_id} {TARGET_CLASSES[cls_id]} ENTERED at {bc}"
+                )
             track_last[track_id] = bc
-        track_inside[track_id] = inside
+            track_inside[track_id] = True
+        else:
+            if was_inside:
+                track_outside_count[track_id] = track_outside_count.get(track_id, 0) + 1
+                if track_outside_count[track_id] >= EXIT_DEBOUNCE_FRAMES:
+                    print(
+                        f"[{frame_number}] #{track_id} {TARGET_CLASSES[cls_id]} EXITED at {bc}"
+                    )
+                    track_inside[track_id] = False
+                    track_outside_count.pop(track_id, None)
+                    if track_id in track_entry and track_id not in counted:
+                        last_inside = track_last.get(track_id, track_entry[track_id])
+                        direction = classify_direction(last_inside, bc)
+                        counted.add(track_id)
+                        class_name = TARGET_CLASSES[cls_id]
+                        crossing_counts[(class_name, direction)] += 1
+                        print(f"  -> COUNTED as {class_name} {direction}")
+            else:
+                track_inside[track_id] = False
 
 
 def put_text(frame, text, x, y, scale=0.5, color=(255, 255, 255)):
@@ -154,6 +172,7 @@ def main():
     track_inside = {}
     track_entry = {}
     track_last = {}
+    track_outside_count = {}
     counted = set()
     crossing_counts = defaultdict(int)
 
@@ -168,7 +187,14 @@ def main():
         detections = filter_target_boxes(boxes)
 
         update_crossings(
-            detections, track_inside, track_entry, track_last, counted, crossing_counts
+            frame_number,
+            detections,
+            track_inside,
+            track_entry,
+            track_last,
+            track_outside_count,
+            counted,
+            crossing_counts,
         )
         draw_detections(frame, detections)
 
