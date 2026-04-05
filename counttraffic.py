@@ -14,12 +14,12 @@ CROSSWALK_ALPHA = 0.3
 CONFIDENCE_THRESHOLD = 0.4
 TARGET_CLASSES = {0: "human", 1: "bike", 2: "car"}
 BOX_COLORS = {0: (0, 0, 255), 1: (0, 255, 0), 2: (255, 0, 255)}
-START_FRAME = 500
+START_FRAME = 0
 
 
-def draw_detections(frame, results):
-    """Draw bounding boxes and labels for detected target objects."""
-    for box in results[0].boxes:
+def draw_detections(frame, boxes):
+    """Draw bounding boxes with track IDs for detected target objects."""
+    for box in boxes:
         cls_id = int(box.cls)
         if cls_id not in TARGET_CLASSES:
             continue
@@ -27,8 +27,9 @@ def draw_detections(frame, results):
             continue
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         color = BOX_COLORS[cls_id]
+        track_id = int(box.id) if box.id is not None else -1
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        label = f"{TARGET_CLASSES[cls_id]} {float(box.conf):.2f}"
+        label = f"{TARGET_CLASSES[cls_id]} #{track_id}"
         cv2.putText(frame, label, (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
 
@@ -49,8 +50,9 @@ def main():
             break
         frame_number += 1
 
-        results = model(frame, verbose=False)
-        draw_detections(frame, results)
+        results = model.track(frame, persist=True, verbose=False)
+        boxes = results[0].boxes
+        draw_detections(frame, boxes)
 
         overlay = frame.copy()
         cv2.fillPoly(overlay, [CROSSWALK_ZONE], CROSSWALK_COLOR)
