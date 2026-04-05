@@ -2,9 +2,13 @@
 # RBE 549 Lab 11: Traffic Monitoring
 
 import cv2
+import numpy as np
 
 VIDEO_PATH = "TrafficVideo.mp4"
 WINDOW_NAME = "Traffic Monitor"
+CROSSWALK_ZONE = np.array([(623, 853), (1297, 606), (1681, 629), (1432, 966)])
+CROSSWALK_COLOR = (0, 255, 255)
+CROSSWALK_ALPHA = 0.3
 
 
 def main():
@@ -20,6 +24,11 @@ def main():
         if not ret:
             break
         frame_number += 1
+
+        overlay = frame.copy()
+        cv2.fillPoly(overlay, [CROSSWALK_ZONE], CROSSWALK_COLOR)
+        cv2.addWeighted(overlay, CROSSWALK_ALPHA, frame, 1 - CROSSWALK_ALPHA, 0, frame)
+        cv2.polylines(frame, [CROSSWALK_ZONE], True, CROSSWALK_COLOR, 2)
 
         label = f"{frame_number}/{total_frames}"
         cv2.putText(

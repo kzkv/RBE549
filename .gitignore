@@ -28,6 +28,9 @@ env/
 .DS_Store
 Thumbs.db
 
+# Video files
+*.mp4
+
 # Data and model files (common in educational projects)
 *.csv
 *.pkl
