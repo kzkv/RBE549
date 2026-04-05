@@ -3,27 +3,54 @@
 
 import cv2
 import numpy as np
+from ultralytics import YOLO
 
 VIDEO_PATH = "TrafficVideo.mp4"
+MODEL_PATH = "yolo11n.pt"
 WINDOW_NAME = "Traffic Monitor"
 CROSSWALK_ZONE = np.array([(623, 853), (1297, 606), (1681, 629), (1432, 966)])
 CROSSWALK_COLOR = (0, 255, 255)
 CROSSWALK_ALPHA = 0.3
+CONFIDENCE_THRESHOLD = 0.4
+TARGET_CLASSES = {0: "human", 1: "bike", 2: "car"}
+BOX_COLORS = {0: (0, 0, 255), 1: (0, 255, 0), 2: (255, 0, 255)}
+START_FRAME = 500
+
+
+def draw_detections(frame, results):
+    """Draw bounding boxes and labels for detected target objects."""
+    for box in results[0].boxes:
+        cls_id = int(box.cls)
+        if cls_id not in TARGET_CLASSES:
+            continue
+        if float(box.conf) < CONFIDENCE_THRESHOLD:
+            continue
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        color = BOX_COLORS[cls_id]
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        label = f"{TARGET_CLASSES[cls_id]} {float(box.conf):.2f}"
+        cv2.putText(frame, label, (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
 
 def main():
+    model = YOLO(MODEL_PATH)
     cap = cv2.VideoCapture(VIDEO_PATH)
     if not cap.isOpened():
         raise FileNotFoundError(f"Cannot open video: {VIDEO_PATH}")
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_number = 0
+    if START_FRAME > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, START_FRAME)
+    frame_number = START_FRAME
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         frame_number += 1
+
+        results = model(frame, verbose=False)
+        draw_detections(frame, results)
 
         overlay = frame.copy()
         cv2.fillPoly(overlay, [CROSSWALK_ZONE], CROSSWALK_COLOR)
