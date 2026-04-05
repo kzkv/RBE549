@@ -1,6 +1,7 @@
 # Tom Kazakov
 # RBE 549 Lab 11: Traffic Monitoring
 
+import time
 import cv2
 import numpy as np
 from collections import defaultdict
@@ -192,6 +193,7 @@ def main():
         if not ret:
             break
         frame_number += 1
+        t0 = time.perf_counter()
 
         results = model.track(frame, persist=True, verbose=False)
         detections = filter_target_boxes(results[0].boxes)
@@ -200,9 +202,11 @@ def main():
         draw_detections(frame, detections)
         draw_crosswalk(frame)
         draw_hud(frame, tracker.counts)
+
+        processing_fps = 1.0 / max(time.perf_counter() - t0, 1e-9)
         put_text(
             frame,
-            f"{frame_number}/{total_frames}",
+            f"{frame_number}/{total_frames} | {processing_fps:.1f} fps",
             10,
             30,
             scale=0.7,
