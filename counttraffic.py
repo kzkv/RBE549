@@ -9,7 +9,9 @@ from ultralytics import YOLO
 VIDEO_PATH = "TrafficVideo.mp4"
 MODEL_PATH = "yolo11n.pt"
 WINDOW_NAME = "Traffic Monitor"
-START_FRAME = 700
+OUTPUT_PATH = "week11_outcome.mp4"
+RECORD = True
+START_FRAME = 0
 CONFIDENCE_THRESHOLD = 0.4
 EXIT_DEBOUNCE_FRAMES = 5
 
@@ -171,11 +173,19 @@ def main():
     if not cap.isOpened():
         raise FileNotFoundError(f"Cannot open video: {VIDEO_PATH}")
 
+    fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if START_FRAME > 0:
         cap.set(cv2.CAP_PROP_POS_FRAMES, START_FRAME)
     frame_number = START_FRAME
     tracker = CrossingTracker()
+
+    writer = None
+    if RECORD:
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(OUTPUT_PATH, fourcc, fps, (w, h))
 
     while True:
         ret, frame = cap.read()
@@ -199,10 +209,14 @@ def main():
             color=(0, 255, 0),
         )
 
+        if writer:
+            writer.write(frame)
         cv2.imshow(WINDOW_NAME, frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
+    if writer:
+        writer.release()
     cap.release()
     cv2.destroyAllWindows()
 
