@@ -9,3 +9,4 @@ open3d~=0.19.0
 matplotlib~=3.10.0
 tensorflow~=2.19.0
 ultralytics~=8.4.33
+imageio~=2.37.3
