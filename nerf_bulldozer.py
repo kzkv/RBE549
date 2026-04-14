@@ -24,7 +24,7 @@ DATA_URL = (
 BATCH_SIZE = 5
 NUM_SAMPLES = 32
 POS_ENCODE_DIMS = 16
-EPOCHS = 20
+EPOCHS = 2
 NEAR = 2.0
 FAR = 6.0
 DENSE_UNITS = 64
@@ -95,10 +95,7 @@ def render_flat_rays(ray_origins, ray_directions, near, far, num_samples, rand=F
 
 def render_rgb_depth(model, rays_flat, t_vals, rand=True, train=True):
     """Apply the volume rendering equation to produce an RGB image and depth map."""
-    if train:
-        predictions = model(rays_flat)
-    else:
-        predictions = model.predict(rays_flat)
+    predictions = model(rays_flat, training=train)
     predictions = tf.reshape(predictions, shape=(BATCH_SIZE, H, W, NUM_SAMPLES, 4))
 
     rgb = tf.sigmoid(predictions[..., :-1])
@@ -199,8 +196,8 @@ class NeRF(keras.Model):
         return [self.loss_tracker, self.psnr_metric]
 
 
-def build_dataset(images, poses, height, width, focal):
-    """Construct a shuffled, batched tf.data.Dataset yielding (image, (rays_flat, t_vals))."""
+def build_dataset(images, poses, height, width, focal, shuffle):
+    """Build a batched tf.data.Dataset yielding (image, (rays_flat, t_vals))."""
 
     def map_fn(pose):
         ray_origins, ray_directions = get_rays(height, width, focal, pose)
@@ -215,13 +212,14 @@ def build_dataset(images, poses, height, width, focal):
 
     img_ds = tf.data.Dataset.from_tensor_slices(images)
     pose_ds = tf.data.Dataset.from_tensor_slices(poses)
-    ray_ds = pose_ds.map(map_fn, num_parallel_calls=tf.data.AUTOTUNE)
-    return (
-        tf.data.Dataset.zip((img_ds, ray_ds))
-        .shuffle(BATCH_SIZE)
-        .batch(BATCH_SIZE, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE)
-        .prefetch(tf.data.AUTOTUNE)
-    )
+    ray_ds = pose_ds.map(map_fn).cache()
+    ds = tf.data.Dataset.zip((img_ds, ray_ds))
+    if shuffle:
+        ds = ds.shuffle(buffer_size=len(images), reshuffle_each_iteration=True)
+    ds = ds.batch(BATCH_SIZE, drop_remainder=True)
+    num_batches = len(images) // BATCH_SIZE
+    ds = ds.apply(tf.data.experimental.assert_cardinality(num_batches))
+    return ds.prefetch(tf.data.AUTOTUNE)
 
 
 loss_list = []
@@ -237,8 +235,22 @@ class TrainMonitor(keras.callbacks.Callback):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
 
+    def on_epoch_begin(self, epoch, logs=None):
+        print(f"\n[epoch {epoch + 1}/{EPOCHS}] starting", flush=True)
+
     def on_epoch_end(self, epoch, logs=None):
-        loss_list.append(logs["loss"])
+        logs = logs or {}
+        loss = logs.get("loss", float("nan"))
+        psnr = logs.get("psnr", float("nan"))
+        val_loss = logs.get("val_loss", float("nan"))
+        val_psnr = logs.get("val_psnr", float("nan"))
+        print(
+            f"[epoch {epoch + 1}/{EPOCHS}] "
+            f"loss={loss:.4f} psnr={psnr:.2f} "
+            f"val_loss={val_loss:.4f} val_psnr={val_psnr:.2f}",
+            flush=True,
+        )
+        loss_list.append(loss)
         rgb, depth = render_rgb_depth(
             model=self.model.nerf_model,
             rays_flat=self.test_rays_flat,
@@ -258,3 +270,28 @@ class TrainMonitor(keras.callbacks.Callback):
 
         fig.savefig(f"{self.output_dir}/{epoch:03d}.png")
         plt.close(fig)
+
+
+if __name__ == "__main__":
+    train_images, val_images, train_poses, val_poses, focal = load_data()
+    H, W = train_images.shape[1:3]
+
+    train_ds = build_dataset(train_images, train_poses, H, W, focal, shuffle=True)
+    val_ds = build_dataset(val_images, val_poses, H, W, focal, shuffle=False)
+
+    test_imgs, test_rays = next(iter(train_ds))
+    test_rays_flat, test_t_vals = test_rays
+
+    nerf_model = get_nerf_model(num_layers=NUM_LAYERS, num_pos=H * W * NUM_SAMPLES)
+    model = NeRF(nerf_model)
+    model.compile(
+        optimizer=keras.optimizers.Adam(),
+        loss_fn=keras.losses.MeanSquaredError(),
+    )
+
+    model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=EPOCHS,
+        callbacks=[TrainMonitor(test_rays_flat, test_t_vals)],
+    )
