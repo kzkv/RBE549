@@ -197,3 +197,64 @@ class NeRF(keras.Model):
     @property
     def metrics(self):
         return [self.loss_tracker, self.psnr_metric]
+
+
+def build_dataset(images, poses, height, width, focal):
+    """Construct a shuffled, batched tf.data.Dataset yielding (image, (rays_flat, t_vals))."""
+
+    def map_fn(pose):
+        ray_origins, ray_directions = get_rays(height, width, focal, pose)
+        return render_flat_rays(
+            ray_origins,
+            ray_directions,
+            near=NEAR,
+            far=FAR,
+            num_samples=NUM_SAMPLES,
+            rand=True,
+        )
+
+    img_ds = tf.data.Dataset.from_tensor_slices(images)
+    pose_ds = tf.data.Dataset.from_tensor_slices(poses)
+    ray_ds = pose_ds.map(map_fn, num_parallel_calls=tf.data.AUTOTUNE)
+    return (
+        tf.data.Dataset.zip((img_ds, ray_ds))
+        .shuffle(BATCH_SIZE)
+        .batch(BATCH_SIZE, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+
+loss_list = []
+
+
+class TrainMonitor(keras.callbacks.Callback):
+    """Save predicted RGB, depth, and loss-curve figures at each epoch end."""
+
+    def __init__(self, test_rays_flat, test_t_vals, output_dir="nerf_bulldozer_epochs"):
+        super().__init__()
+        self.test_rays_flat = test_rays_flat
+        self.test_t_vals = test_t_vals
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+
+    def on_epoch_end(self, epoch, logs=None):
+        loss_list.append(logs["loss"])
+        rgb, depth = render_rgb_depth(
+            model=self.model.nerf_model,
+            rays_flat=self.test_rays_flat,
+            t_vals=self.test_t_vals,
+            rand=True,
+            train=False,
+        )
+
+        fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(20, 5))
+        ax[0].imshow(keras.utils.array_to_img(rgb[0]))
+        ax[0].set_title(f"Predicted Image: {epoch:03d}")
+        ax[1].imshow(keras.utils.array_to_img(depth[0, ..., None]))
+        ax[1].set_title(f"Depth Map: {epoch:03d}")
+        ax[2].plot(loss_list)
+        ax[2].set_xticks(np.arange(0, EPOCHS + 1, 5.0))
+        ax[2].set_title(f"Loss Plot: {epoch:03d}")
+
+        fig.savefig(f"{self.output_dir}/{epoch:03d}.png")
+        plt.close(fig)
