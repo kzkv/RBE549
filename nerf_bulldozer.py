@@ -126,3 +126,74 @@ def render_rgb_depth(model, rays_flat, t_vals, rand=True, train=True):
     else:
         depth_map = tf.reduce_sum(weights * t_vals[:, None, None], axis=-1)
     return rgb, depth_map
+
+
+def get_nerf_model(num_layers, num_pos):
+    """Build the NeRF MLP with a skip connection at the midpoint."""
+    inputs = keras.Input(shape=(num_pos, 2 * 3 * POS_ENCODE_DIMS + 3))
+    x = inputs
+    for i in range(num_layers):
+        x = layers.Dense(units=DENSE_UNITS, activation="relu")(x)
+        if i % 4 == 0 and i > 0:
+            x = layers.concatenate([x, inputs], axis=-1)
+    outputs = layers.Dense(units=4)(x)
+    return keras.Model(inputs=inputs, outputs=outputs)
+
+
+class NeRF(keras.Model):
+    """Wraps the NeRF MLP with a custom training loop for volumetric rendering."""
+
+    def __init__(self, nerf_model):
+        super().__init__()
+        self.nerf_model = nerf_model
+
+    def compile(self, optimizer, loss_fn):
+        super().compile()
+        self.optimizer = optimizer
+        self.loss_fn = loss_fn
+        self.loss_tracker = keras.metrics.Mean(name="loss")
+        self.psnr_metric = keras.metrics.Mean(name="psnr")
+
+    def train_step(self, inputs):
+        images, rays = inputs
+        rays_flat, t_vals = rays
+
+        with tf.GradientTape() as tape:
+            rgb, _ = render_rgb_depth(
+                model=self.nerf_model,
+                rays_flat=rays_flat,
+                t_vals=t_vals,
+                rand=True,
+            )
+            loss = self.loss_fn(images, rgb)
+
+        gradients = tape.gradient(loss, self.nerf_model.trainable_variables)
+        self.optimizer.apply_gradients(
+            zip(gradients, self.nerf_model.trainable_variables)
+        )
+
+        psnr = tf.image.psnr(images, rgb, max_val=1.0)
+        self.loss_tracker.update_state(loss)
+        self.psnr_metric.update_state(psnr)
+        return {"loss": self.loss_tracker.result(), "psnr": self.psnr_metric.result()}
+
+    def test_step(self, inputs):
+        images, rays = inputs
+        rays_flat, t_vals = rays
+
+        rgb, _ = render_rgb_depth(
+            model=self.nerf_model,
+            rays_flat=rays_flat,
+            t_vals=t_vals,
+            rand=True,
+        )
+        loss = self.loss_fn(images, rgb)
+
+        psnr = tf.image.psnr(images, rgb, max_val=1.0)
+        self.loss_tracker.update_state(loss)
+        self.psnr_metric.update_state(psnr)
+        return {"loss": self.loss_tracker.result(), "psnr": self.psnr_metric.result()}
+
+    @property
+    def metrics(self):
+        return [self.loss_tracker, self.psnr_metric]
