@@ -212,13 +212,11 @@ def build_dataset(images, poses, height, width, focal, shuffle):
 
     img_ds = tf.data.Dataset.from_tensor_slices(images)
     pose_ds = tf.data.Dataset.from_tensor_slices(poses)
-    ray_ds = pose_ds.map(map_fn).cache()
+    ray_ds = pose_ds.map(map_fn, num_parallel_calls=tf.data.AUTOTUNE)
     ds = tf.data.Dataset.zip((img_ds, ray_ds))
     if shuffle:
-        ds = ds.shuffle(buffer_size=len(images), reshuffle_each_iteration=True)
-    ds = ds.batch(BATCH_SIZE, drop_remainder=True)
-    num_batches = len(images) // BATCH_SIZE
-    ds = ds.apply(tf.data.experimental.assert_cardinality(num_batches))
+        ds = ds.shuffle(BATCH_SIZE)
+    ds = ds.batch(BATCH_SIZE, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE)
     return ds.prefetch(tf.data.AUTOTUNE)
 
 
