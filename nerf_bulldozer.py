@@ -24,7 +24,7 @@ DATA_URL = (
 BATCH_SIZE = 5
 NUM_SAMPLES = 32
 POS_ENCODE_DIMS = 16
-EPOCHS = 2
+EPOCHS = 20
 NEAR = 2.0
 FAR = 6.0
 DENSE_UNITS = 64
@@ -270,6 +270,92 @@ class TrainMonitor(keras.callbacks.Callback):
         plt.close(fig)
 
 
+def get_translation_t(t):
+    """Translation matrix along the z-axis."""
+    return tf.convert_to_tensor(
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, t], [0, 0, 0, 1]], dtype=tf.float32
+    )
+
+
+def get_rotation_phi(phi):
+    """Rotation matrix around the x-axis."""
+    return tf.convert_to_tensor(
+        [
+            [1, 0, 0, 0],
+            [0, tf.cos(phi), -tf.sin(phi), 0],
+            [0, tf.sin(phi), tf.cos(phi), 0],
+            [0, 0, 0, 1],
+        ],
+        dtype=tf.float32,
+    )
+
+
+def get_rotation_theta(theta):
+    """Rotation matrix around the y-axis."""
+    return tf.convert_to_tensor(
+        [
+            [tf.cos(theta), 0, -tf.sin(theta), 0],
+            [0, 1, 0, 0],
+            [tf.sin(theta), 0, tf.cos(theta), 0],
+            [0, 0, 0, 1],
+        ],
+        dtype=tf.float32,
+    )
+
+
+def pose_spherical(theta, phi, t):
+    """Compose a camera-to-world matrix orbiting the origin at radius t."""
+    c2w = get_translation_t(t)
+    c2w = get_rotation_phi(phi / 180.0 * np.pi) @ c2w
+    c2w = get_rotation_theta(theta / 180.0 * np.pi) @ c2w
+    c2w = (
+        np.array(
+            [[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=np.float32
+        )
+        @ c2w
+    )
+    return c2w
+
+
+def render_orbit(
+    nerf_model, height, width, focal, num_frames=120, radius=4.0, phi=-30.0
+):
+    """Render a 360-degree orbit and return a list of uint8 RGB frames."""
+    frames = []
+    batch_flat = []
+    batch_t = []
+    for index, theta in enumerate(
+        tqdm(np.linspace(0.0, 360.0, num_frames, endpoint=False))
+    ):
+        c2w = pose_spherical(theta, phi, radius)
+        ray_origins, ray_directions = get_rays(height, width, focal, c2w)
+        rays_flat, t_vals = render_flat_rays(
+            ray_origins,
+            ray_directions,
+            near=NEAR,
+            far=FAR,
+            num_samples=NUM_SAMPLES,
+            rand=False,
+        )
+        batch_flat.append(rays_flat)
+        batch_t.append(t_vals)
+
+        if len(batch_flat) == BATCH_SIZE:
+            rgb, _ = render_rgb_depth(
+                nerf_model,
+                tf.stack(batch_flat, axis=0),
+                tf.stack(batch_t, axis=0),
+                rand=False,
+                train=False,
+            )
+            frames.extend(
+                np.clip(255.0 * img.numpy(), 0.0, 255.0).astype(np.uint8) for img in rgb
+            )
+            batch_flat = []
+            batch_t = []
+    return frames
+
+
 if __name__ == "__main__":
     train_images, val_images, train_poses, val_poses, focal = load_data()
     H, W = train_images.shape[1:3]
@@ -292,4 +378,13 @@ if __name__ == "__main__":
         validation_data=val_ds,
         epochs=EPOCHS,
         callbacks=[TrainMonitor(test_rays_flat, test_t_vals)],
+    )
+
+    orbit_frames = render_orbit(model.nerf_model, H, W, focal)
+    imageio.mimwrite(
+        "nerf_bulldozer_orbit.mp4",
+        orbit_frames,
+        fps=30,
+        quality=7,
+        macro_block_size=None,
     )
