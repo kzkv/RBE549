@@ -1,13 +1,14 @@
 # Tom Kazakov
-# RBE 549 Lab 13: NeRF on Blender Synthetic Dataset
+# RBE 549 Lab 13: NeRF on Custom Dataset via COLMAP
 
-import json
 import os
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
 import glob
+import struct
+import subprocess
 
 import imageio.v2 as imageio
 import keras
@@ -19,51 +20,210 @@ from tqdm import tqdm
 
 tf.random.set_seed(42)
 
-SCENE_DIR = "ship"
-SCENE_ZIP = "/content/drive/MyDrive/RBE 549/Lab 13/ship.zip"
-SCENE_SLUG = "ship"
+IMAGE_DIR = "newfruit_small"
+IMAGE_ZIP = "/content/drive/MyDrive/RBE 549/Lab 13/newfruit_small.zip"
+SCENE_SLUG = "newfruit"
 DRIVE_OUTPUT = "/content/drive/MyDrive/RBE 549/Lab 13"
+COLMAP_DB = "colmap.db"
+COLMAP_SPARSE = "sparse"
 DOWNSAMPLE_FACTOR = 4
 BATCH_SIZE = 5
 NUM_SAMPLES = 32
 POS_ENCODE_DIMS = 16
-EPOCHS = 100
+EPOCHS = 50
 NEAR = 2.0
 FAR = 6.0
 DENSE_UNITS = 64
 NUM_LAYERS = 8
+TRAIN_SPLIT = 0.8
 
 
-def load_blender_data(scene_dir, downsample):
-    """Load a Blender synthetic NeRF scene (transforms JSON + RGBA PNGs)."""
-    splits = {}
-    for split in ["train", "val"]:
-        with open(os.path.join(scene_dir, f"transforms_{split}.json")) as f:
-            meta = json.load(f)
+# --- COLMAP ---
 
-        imgs = []
-        poses = []
-        for frame in meta["frames"]:
-            fpath = os.path.join(scene_dir, frame["file_path"] + ".png")
-            img = imageio.imread(fpath).astype(np.float32) / 255.0
-            if downsample > 1:
-                h, w = img.shape[:2]
-                img = tf.image.resize(img, [h // downsample, w // downsample]).numpy()
-            rgba = img[..., :4]
-            rgb = rgba[..., :3] * rgba[..., 3:] + (1.0 - rgba[..., 3:])
-            imgs.append(rgb)
-            poses.append(np.array(frame["transform_matrix"], dtype=np.float32))
 
-        splits[split] = (np.stack(imgs), np.stack(poses))
+def run_colmap(image_dir, db_path, sparse_dir):
+    """Run the COLMAP SfM pipeline: extract, match, reconstruct."""
+    os.makedirs(sparse_dir, exist_ok=True)
 
-    camera_angle_x = meta["camera_angle_x"]
-    h_ds = splits["train"][0].shape[1]
-    w_ds = splits["train"][0].shape[2]
-    focal = float(0.5 * w_ds / np.tan(0.5 * camera_angle_x))
+    subprocess.run(
+        [
+            "colmap",
+            "feature_extractor",
+            "--database_path",
+            db_path,
+            "--image_path",
+            image_dir,
+            "--ImageReader.single_camera",
+            "1",
+            "--ImageReader.camera_model",
+            "SIMPLE_PINHOLE",
+            "--SiftExtraction.use_gpu",
+            "0",
+        ],
+        check=True,
+    )
 
-    train_images, train_poses = splits["train"]
-    val_images, val_poses = splits["val"]
-    return train_images, val_images, train_poses, val_poses, focal
+    subprocess.run(
+        [
+            "colmap",
+            "exhaustive_matcher",
+            "--database_path",
+            db_path,
+            "--SiftMatching.use_gpu",
+            "0",
+        ],
+        check=True,
+    )
+
+    subprocess.run(
+        [
+            "colmap",
+            "mapper",
+            "--database_path",
+            db_path,
+            "--image_path",
+            image_dir,
+            "--output_path",
+            sparse_dir,
+        ],
+        check=True,
+    )
+
+
+def read_cameras_binary(path):
+    """Parse COLMAP cameras.bin and return a dict of camera parameters."""
+    cameras = {}
+    with open(path, "rb") as f:
+        num_cameras = struct.unpack("<Q", f.read(8))[0]
+        for _ in range(num_cameras):
+            camera_id = struct.unpack("<i", f.read(4))[0]
+            model_id = struct.unpack("<i", f.read(4))[0]
+            width = struct.unpack("<Q", f.read(8))[0]
+            height = struct.unpack("<Q", f.read(8))[0]
+            # SIMPLE_PINHOLE has 3 params: f, cx, cy
+            num_params = {0: 3, 1: 4, 2: 4, 3: 5, 4: 4, 5: 5}[model_id]
+            params = struct.unpack(f"<{num_params}d", f.read(8 * num_params))
+            cameras[camera_id] = {
+                "width": width,
+                "height": height,
+                "focal": params[0],
+                "params": params,
+            }
+    return cameras
+
+
+def quaternion_to_rotation(qw, qx, qy, qz):
+    """Convert a unit quaternion to a 3x3 rotation matrix."""
+    return np.array(
+        [
+            [
+                1 - 2 * (qy**2 + qz**2),
+                2 * (qx * qy - qz * qw),
+                2 * (qx * qz + qy * qw),
+            ],
+            [
+                2 * (qx * qy + qz * qw),
+                1 - 2 * (qx**2 + qz**2),
+                2 * (qy * qz - qx * qw),
+            ],
+            [
+                2 * (qx * qz - qy * qw),
+                2 * (qy * qz + qx * qw),
+                1 - 2 * (qx**2 + qy**2),
+            ],
+        ]
+    )
+
+
+def read_images_binary(path):
+    """Parse COLMAP images.bin and return filenames and camera-to-world matrices."""
+    filenames = []
+    poses = []
+    with open(path, "rb") as f:
+        num_images = struct.unpack("<Q", f.read(8))[0]
+        for _ in range(num_images):
+            struct.unpack("<i", f.read(4))  # image_id
+            qw, qx, qy, qz = struct.unpack("<4d", f.read(32))
+            tx, ty, tz = struct.unpack("<3d", f.read(24))
+            camera_id = struct.unpack("<i", f.read(4))[0]
+            name = b""
+            while True:
+                c = f.read(1)
+                if c == b"\x00":
+                    break
+                name += c
+            num_points2d = struct.unpack("<Q", f.read(8))[0]
+            # Skip 2D point data (x, y, point3D_id per point)
+            f.read(num_points2d * 24)
+
+            R = quaternion_to_rotation(qw, qx, qy, qz)
+            t = np.array([tx, ty, tz])
+            # COLMAP stores world-to-camera; invert to camera-to-world
+            c2w = np.eye(4, dtype=np.float32)
+            c2w[:3, :3] = R.T
+            c2w[:3, 3] = -R.T @ t
+            # Convert COLMAP (x right, y down, z forward) to OpenGL (x right, y up, z back)
+            c2w[:3, 1:3] *= -1
+
+            filenames.append(name.decode("utf-8"))
+            poses.append(c2w)
+    return filenames, np.stack(poses)
+
+
+def normalize_poses(poses):
+    """Center and scale poses so cameras sit at radius ~4 from the origin."""
+    centers = poses[:, :3, 3]
+    centroid = centers.mean(axis=0)
+    poses[:, :3, 3] -= centroid
+
+    avg_radius = np.linalg.norm(poses[:, :3, 3], axis=1).mean()
+    target_radius = 4.0
+    scale = target_radius / avg_radius
+    poses[:, :3, 3] *= scale
+    return poses, scale
+
+
+def load_colmap_data(image_dir, sparse_dir, downsample):
+    """Load images and COLMAP poses, downscale, normalize, and split."""
+    cameras = read_cameras_binary(os.path.join(sparse_dir, "0", "cameras.bin"))
+    filenames, poses = read_images_binary(os.path.join(sparse_dir, "0", "images.bin"))
+
+    cam = next(iter(cameras.values()))
+    focal_full = cam["focal"]
+    focal = focal_full / downsample
+
+    imgs = []
+    valid_poses = []
+    for fname, pose in zip(filenames, poses):
+        fpath = os.path.join(image_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        img = imageio.imread(fpath).astype(np.float32) / 255.0
+        if downsample > 1:
+            h, w = img.shape[:2]
+            img = tf.image.resize(img, [h // downsample, w // downsample]).numpy()
+        imgs.append(img)
+        valid_poses.append(pose)
+
+    images = np.stack(imgs)
+    poses = np.stack(valid_poses)
+    poses, _ = normalize_poses(poses)
+
+    num = len(images)
+    split = int(num * TRAIN_SPLIT)
+    indices = np.random.permutation(num)
+    train_idx, val_idx = indices[:split], indices[split:]
+
+    return (
+        images[train_idx],
+        images[val_idx],
+        poses[train_idx],
+        poses[val_idx],
+        float(focal),
+    )
+
+
+# --- NeRF core (identical to Parts 1-2) ---
 
 
 def encode_position(x):
@@ -242,7 +402,7 @@ loss_list = []
 class TrainMonitor(keras.callbacks.Callback):
     """Save predicted RGB, depth, and loss-curve figures at each epoch end."""
 
-    def __init__(self, test_rays_flat, test_t_vals, output_dir="nerf_ship_epochs"):
+    def __init__(self, test_rays_flat, test_t_vals, output_dir):
         super().__init__()
         self.test_rays_flat = test_rays_flat
         self.test_t_vals = test_t_vals
@@ -374,26 +534,38 @@ def render_orbit(
 
 
 if __name__ == "__main__":
-    if not os.path.isdir(SCENE_DIR) and os.path.isfile(SCENE_ZIP):
+    # Extract images if needed
+    if not os.path.isdir(IMAGE_DIR) and os.path.isfile(IMAGE_ZIP):
         import zipfile
 
-        with zipfile.ZipFile(SCENE_ZIP, "r") as zf:
+        with zipfile.ZipFile(IMAGE_ZIP, "r") as zf:
             zf.extractall(".")
-        print(f"extracted {SCENE_ZIP} to ./{SCENE_DIR}")
+        print(f"extracted {IMAGE_ZIP} to ./{IMAGE_DIR}")
 
-    train_images, val_images, train_poses, val_poses, focal = load_blender_data(
-        SCENE_DIR, DOWNSAMPLE_FACTOR
+    # Run COLMAP if not already done
+    cameras_bin = os.path.join(COLMAP_SPARSE, "0", "cameras.bin")
+    if not os.path.isfile(cameras_bin):
+        print("running COLMAP sparse reconstruction...")
+        run_colmap(IMAGE_DIR, COLMAP_DB, COLMAP_SPARSE)
+    else:
+        print("COLMAP reconstruction found, skipping")
+
+    # Load data
+    train_images, val_images, train_poses, val_poses, focal = load_colmap_data(
+        IMAGE_DIR, COLMAP_SPARSE, DOWNSAMPLE_FACTOR
     )
     H, W = train_images.shape[1:3]
     print(f"loaded {len(train_images)} train, {len(val_images)} val images at {H}x{W}")
     print(f"focal length: {focal:.2f}")
 
+    # Build datasets and train
     train_ds = build_dataset(train_images, train_poses, H, W, focal, shuffle=True)
     val_ds = build_dataset(val_images, val_poses, H, W, focal, shuffle=False)
 
     test_imgs, test_rays = next(iter(train_ds))
     test_rays_flat, test_t_vals = test_rays
 
+    epochs_dir = f"nerf_{SCENE_SLUG}_epochs"
     nerf_model = get_nerf_model(num_layers=NUM_LAYERS, num_pos=H * W * NUM_SAMPLES)
     model = NeRF(nerf_model)
     model.compile(
@@ -405,19 +577,19 @@ if __name__ == "__main__":
         train_ds,
         validation_data=val_ds,
         epochs=EPOCHS,
-        callbacks=[TrainMonitor(test_rays_flat, test_t_vals)],
+        callbacks=[TrainMonitor(test_rays_flat, test_t_vals, output_dir=epochs_dir)],
     )
 
+    # Render orbit and persist outputs
     orbit_mp4 = f"nerf_{SCENE_SLUG}_orbit.mp4"
     orbit_frames = render_orbit(model.nerf_model, H, W, focal)
-    imageio.mimwrite(orbit_mp4, orbit_frames, fps=30, quality=7, macro_block_size=None)
+    imageio.mimwrite(orbit_mp4, orbit_frames, fps=30, quality=7, macro_block_size=2)
 
     from datetime import datetime
     import shutil
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_name = f"nerf_{SCENE_SLUG}_{timestamp}"
-    epochs_dir = f"nerf_{SCENE_SLUG}_epochs"
 
     import zipfile
 
