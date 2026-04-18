@@ -7,8 +7,11 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
 import glob
+import shutil
 import struct
 import subprocess
+import zipfile
+from datetime import datetime
 
 import imageio.v2 as imageio
 import keras
@@ -36,9 +39,6 @@ FAR = 6.0
 DENSE_UNITS = 64
 NUM_LAYERS = 8
 TRAIN_SPLIT = 0.8
-
-
-# --- COLMAP ---
 
 
 def run_colmap(image_dir, db_path, sparse_dir):
@@ -145,7 +145,7 @@ def read_images_binary(path):
             struct.unpack("<i", f.read(4))  # image_id
             qw, qx, qy, qz = struct.unpack("<4d", f.read(32))
             tx, ty, tz = struct.unpack("<3d", f.read(24))
-            camera_id = struct.unpack("<i", f.read(4))[0]
+            struct.unpack("<i", f.read(4))  # camera_id
             name = b""
             while True:
                 c = f.read(1)
@@ -221,9 +221,6 @@ def load_colmap_data(image_dir, sparse_dir, downsample):
         poses[val_idx],
         float(focal),
     )
-
-
-# --- NeRF core (identical to Parts 1-2) ---
 
 
 def encode_position(x):
@@ -446,54 +443,6 @@ class TrainMonitor(keras.callbacks.Callback):
         plt.close(fig)
 
 
-def get_translation_t(t):
-    """Translation matrix along the z-axis."""
-    return tf.convert_to_tensor(
-        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, t], [0, 0, 0, 1]], dtype=tf.float32
-    )
-
-
-def get_rotation_phi(phi):
-    """Rotation matrix around the x-axis."""
-    return tf.convert_to_tensor(
-        [
-            [1, 0, 0, 0],
-            [0, tf.cos(phi), -tf.sin(phi), 0],
-            [0, tf.sin(phi), tf.cos(phi), 0],
-            [0, 0, 0, 1],
-        ],
-        dtype=tf.float32,
-    )
-
-
-def get_rotation_theta(theta):
-    """Rotation matrix around the y-axis."""
-    return tf.convert_to_tensor(
-        [
-            [tf.cos(theta), 0, -tf.sin(theta), 0],
-            [0, 1, 0, 0],
-            [tf.sin(theta), 0, tf.cos(theta), 0],
-            [0, 0, 0, 1],
-        ],
-        dtype=tf.float32,
-    )
-
-
-def pose_spherical(theta, phi, t):
-    """Compose a camera-to-world matrix orbiting the origin at radius t."""
-    c2w = get_translation_t(t)
-    c2w = get_rotation_phi(phi / 180.0 * np.pi) @ c2w
-    c2w = get_rotation_theta(theta / 180.0 * np.pi) @ c2w
-    c2w = (
-        np.array(
-            [[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]],
-            dtype=np.float32,
-        )
-        @ c2w
-    )
-    return c2w
-
-
 def make_orbit_poses(poses, num_frames=120):
     """Generate a smooth circular orbit derived from training camera distribution."""
     centers = poses[:, :3, 3]
@@ -571,8 +520,6 @@ def render_orbit(nerf_model, height, width, focal, poses, num_frames=120):
 if __name__ == "__main__":
     # Extract images if needed
     if not os.path.isdir(IMAGE_DIR) and os.path.isfile(IMAGE_ZIP):
-        import zipfile
-
         with zipfile.ZipFile(IMAGE_ZIP, "r") as zf:
             zf.extractall(".")
         print(f"extracted {IMAGE_ZIP} to ./{IMAGE_DIR}")
@@ -621,13 +568,8 @@ if __name__ == "__main__":
     orbit_frames = render_orbit(model.nerf_model, H, W, focal, all_poses)
     imageio.mimwrite(orbit_mp4, orbit_frames, fps=30, quality=7, macro_block_size=2)
 
-    from datetime import datetime
-    import shutil
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_name = f"nerf_{SCENE_SLUG}_{timestamp}"
-
-    import zipfile
 
     archive_path = f"{output_name}.zip"
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
