@@ -494,17 +494,52 @@ def pose_spherical(theta, phi, t):
     return c2w
 
 
-def render_orbit(
-    nerf_model, height, width, focal, num_frames=120, radius=4.0, phi=-30.0
-):
+def make_orbit_poses(poses, num_frames=120):
+    """Generate a smooth circular orbit derived from training camera distribution."""
+    centers = poses[:, :3, 3]
+    up = poses[:, :3, 1].mean(axis=0)
+    up = up / np.linalg.norm(up)
+
+    avg_height = (centers @ up).mean()
+    proj = centers - np.outer(centers @ up, up)
+    avg_radius = np.linalg.norm(proj, axis=1).mean()
+
+    forward_dirs = -poses[:, :3, 2]
+    gaze_points = centers + 0.5 * avg_radius * forward_dirs
+    target = gaze_points.mean(axis=0)
+
+    arbitrary = np.array([1, 0, 0]) if abs(up[0]) < 0.9 else np.array([0, 1, 0])
+    ref = arbitrary - (arbitrary @ up) * up
+    ref = ref / np.linalg.norm(ref)
+    perp = np.cross(up, ref)
+
+    orbit_poses = []
+    for theta in np.linspace(0, 2 * np.pi, num_frames, endpoint=False):
+        cam_pos = avg_height * up + avg_radius * (
+            np.cos(theta) * ref + np.sin(theta) * perp
+        )
+        z_cam = cam_pos - target
+        z_cam = z_cam / np.linalg.norm(z_cam)
+        x_cam = np.cross(up, z_cam)
+        x_cam = x_cam / np.linalg.norm(x_cam)
+        y_cam = np.cross(z_cam, x_cam)
+
+        c2w = np.eye(4, dtype=np.float32)
+        c2w[:3, 0] = x_cam
+        c2w[:3, 1] = y_cam
+        c2w[:3, 2] = z_cam
+        c2w[:3, 3] = cam_pos
+        orbit_poses.append(c2w)
+    return orbit_poses
+
+
+def render_orbit(nerf_model, height, width, focal, poses, num_frames=120):
     """Render a 360-degree orbit and return a list of uint8 RGB frames."""
+    orbit_poses = make_orbit_poses(poses, num_frames)
     frames = []
     batch_flat = []
     batch_t = []
-    for index, theta in enumerate(
-        tqdm(np.linspace(0.0, 360.0, num_frames, endpoint=False))
-    ):
-        c2w = pose_spherical(theta, phi, radius)
+    for c2w in tqdm(orbit_poses):
         ray_origins, ray_directions = get_rays(height, width, focal, c2w)
         rays_flat, t_vals = render_flat_rays(
             ray_origins,
@@ -582,7 +617,8 @@ if __name__ == "__main__":
 
     # Render orbit and persist outputs
     orbit_mp4 = f"nerf_{SCENE_SLUG}_orbit.mp4"
-    orbit_frames = render_orbit(model.nerf_model, H, W, focal)
+    all_poses = np.concatenate([train_poses, val_poses], axis=0)
+    orbit_frames = render_orbit(model.nerf_model, H, W, focal, all_poses)
     imageio.mimwrite(orbit_mp4, orbit_frames, fps=30, quality=7, macro_block_size=2)
 
     from datetime import datetime
