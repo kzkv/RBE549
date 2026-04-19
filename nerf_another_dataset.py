@@ -8,6 +8,9 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
 import glob
+import shutil
+import zipfile
+from datetime import datetime
 
 import imageio.v2 as imageio
 import keras
@@ -57,7 +60,6 @@ def load_blender_data(scene_dir, downsample):
         splits[split] = (np.stack(imgs), np.stack(poses))
 
     camera_angle_x = meta["camera_angle_x"]
-    h_ds = splits["train"][0].shape[1]
     w_ds = splits["train"][0].shape[2]
     focal = float(0.5 * w_ds / np.tan(0.5 * camera_angle_x))
 
@@ -375,8 +377,6 @@ def render_orbit(
 
 if __name__ == "__main__":
     if not os.path.isdir(SCENE_DIR) and os.path.isfile(SCENE_ZIP):
-        import zipfile
-
         with zipfile.ZipFile(SCENE_ZIP, "r") as zf:
             zf.extractall(".")
         print(f"extracted {SCENE_ZIP} to ./{SCENE_DIR}")
@@ -410,16 +410,11 @@ if __name__ == "__main__":
 
     orbit_mp4 = f"nerf_{SCENE_SLUG}_orbit.mp4"
     orbit_frames = render_orbit(model.nerf_model, H, W, focal)
-    imageio.mimwrite(orbit_mp4, orbit_frames, fps=30, quality=7, macro_block_size=None)
-
-    from datetime import datetime
-    import shutil
+    imageio.mimwrite(orbit_mp4, orbit_frames, fps=30, quality=7, macro_block_size=2)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_name = f"nerf_{SCENE_SLUG}_{timestamp}"
     epochs_dir = f"nerf_{SCENE_SLUG}_epochs"
-
-    import zipfile
 
     archive_path = f"{output_name}.zip"
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:

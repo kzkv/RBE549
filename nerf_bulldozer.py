@@ -6,8 +6,6 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
-import glob
-
 import imageio.v2 as imageio
 import keras
 import matplotlib.pyplot as plt
