@@ -23,13 +23,13 @@ from tqdm import tqdm
 
 tf.random.set_seed(42)
 
-IMAGE_DIR = "newfruit_small"
-IMAGE_ZIP = "/content/drive/MyDrive/RBE 549/Lab 13/newfruit_small.zip"
-SCENE_SLUG = "newfruit"
+IMAGE_DIR = "lab13"
+IMAGE_ZIP = "/content/drive/MyDrive/RBE 549/Lab 13/lab13.zip"
+SCENE_SLUG = "lab13"
 DRIVE_OUTPUT = "/content/drive/MyDrive/RBE 549/Lab 13"
 COLMAP_DB = "colmap.db"
 COLMAP_SPARSE = "sparse"
-DOWNSAMPLE_FACTOR = 4
+DOWNSAMPLE_FACTOR = 5
 BATCH_SIZE = 5
 NUM_SAMPLES = 32
 POS_ENCODE_DIMS = 16
@@ -170,7 +170,7 @@ def read_images_binary(path):
     return filenames, np.stack(poses)
 
 
-def normalize_poses(poses):
+def normalize_poses(poses, fixed_radius=False):
     """Center and scale poses so cameras sit at radius ~4 from the origin."""
     centers = poses[:, :3, 3]
     centroid = centers.mean(axis=0)
@@ -180,6 +180,14 @@ def normalize_poses(poses):
     target_radius = 4.0
     scale = target_radius / avg_radius
     poses[:, :3, 3] *= scale
+
+    if fixed_radius:
+        for i in range(len(poses)):
+            direction = poses[i, :3, 3]
+            norm = np.linalg.norm(direction)
+            if norm > 0:
+                poses[i, :3, 3] = direction / norm * target_radius
+
     return poses, scale
 
 
@@ -207,7 +215,7 @@ def load_colmap_data(image_dir, sparse_dir, downsample):
 
     images = np.stack(imgs)
     poses = np.stack(valid_poses)
-    poses, _ = normalize_poses(poses)
+    poses, _ = normalize_poses(poses, fixed_radius=True)
 
     num = len(images)
     split = int(num * TRAIN_SPLIT)
@@ -537,8 +545,15 @@ if __name__ == "__main__":
         IMAGE_DIR, COLMAP_SPARSE, DOWNSAMPLE_FACTOR
     )
     H, W = train_images.shape[1:3]
+    all_poses = np.concatenate([train_poses, val_poses], axis=0)
+    radii = np.linalg.norm(all_poses[:, :3, 3], axis=1)
+    NEAR = max(0.1, radii.min() * 0.5)
+    FAR = radii.max() * 1.5
     print(f"loaded {len(train_images)} train, {len(val_images)} val images at {H}x{W}")
     print(f"focal length: {focal:.2f}")
+    print(
+        f"camera radii: {radii.min():.2f} to {radii.max():.2f}, NEAR={NEAR:.2f}, FAR={FAR:.2f}"
+    )
 
     # Build datasets and train
     train_ds = build_dataset(train_images, train_poses, H, W, focal, shuffle=True)
@@ -564,7 +579,6 @@ if __name__ == "__main__":
 
     # Render orbit and persist outputs
     orbit_mp4 = f"nerf_{SCENE_SLUG}_orbit.mp4"
-    all_poses = np.concatenate([train_poses, val_poses], axis=0)
     orbit_frames = render_orbit(model.nerf_model, H, W, focal, all_poses)
     imageio.mimwrite(orbit_mp4, orbit_frames, fps=30, quality=7, macro_block_size=2)
 
