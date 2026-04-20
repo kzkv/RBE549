@@ -26,9 +26,26 @@ LABEL_BG_COLOR = (0, 0, 0)
 LABEL_PAD = 4
 LABEL_OFFSET_Y = 30
 
-PAIR_LABEL_SCALE = 0.8
-PAIR_LABEL_THICKNESS = 2
-PAIR_LABEL_ORIGIN = (10, 30)
+STATE_ORIGIN = (10, 30)
+STATE_SCALE = 0.7
+STATE_THICKNESS = 1
+
+BANNER_SCALE = 1.4
+BANNER_THICKNESS = 3
+BANNER_TEXT_COLOR = (255, 255, 255)
+BANNER_BG_COLOR = (32, 32, 32)
+
+DEBOUNCE_FRAMES = 6
+EFFECT_FRAMES = 60
+
+REACTIONS = {
+    "Thumb_Up": "thumbs_up",
+    "Thumb_Down": "thumbs_down",
+    "Closed_Fist": "balloons",
+    "Pointing_Up": "rain",
+    "Victory": "confetti",
+    "Open_Palm": "hearts",
+}
 
 HAND_CONNECTIONS = (
     (0, 1),
@@ -75,29 +92,28 @@ def hand_label(result, i):
     return handedness, "None", 0.0
 
 
-def pair_key(result):
-    if len(result.hand_landmarks) != 2:
-        return None
-    names = []
-    for i in range(2):
-        gestures = result.gestures[i]
-        names.append(gestures[0].category_name if gestures else "None")
-    return frozenset(names)
+def active_reaction_class(result):
+    names = {
+        g[0].category_name
+        for g in result.gestures
+        if g and g[0].category_name in REACTIONS
+    }
+    return next(iter(names)) if len(names) == 1 else None
 
 
-def draw_text_box(frame, text, origin, scale, thickness):
+def draw_text_box(
+    frame, text, origin, scale, thickness, fg=LABEL_TEXT_COLOR, bg=LABEL_BG_COLOR
+):
     x, y = origin
     (tw, th), baseline = cv2.getTextSize(text, LABEL_FONT, scale, thickness)
     cv2.rectangle(
         frame,
         (x - LABEL_PAD, y - th - LABEL_PAD),
         (x + tw + LABEL_PAD, y + baseline + LABEL_PAD),
-        LABEL_BG_COLOR,
+        bg,
         -1,
     )
-    cv2.putText(
-        frame, text, (x, y), LABEL_FONT, scale, LABEL_TEXT_COLOR, thickness, cv2.LINE_AA
-    )
+    cv2.putText(frame, text, (x, y), LABEL_FONT, scale, fg, thickness, cv2.LINE_AA)
 
 
 def draw_hand(frame, landmarks):
@@ -117,11 +133,70 @@ def draw_hand_label(frame, landmarks, handedness, gesture, score):
     draw_text_box(frame, text, origin, LABEL_SCALE, LABEL_THICKNESS)
 
 
-def draw_pair_label(frame, key):
-    text = "Pair: {" + ", ".join(sorted(key)) + "}"
+def draw_state_indicator(frame, detector):
+    if detector.state == ReactionDetector.IDLE:
+        text = "IDLE"
+    elif detector.state == ReactionDetector.CANDIDATE:
+        text = f"CANDIDATE {detector.cls} {detector.count}/{detector.debounce_frames}"
+    else:
+        reaction_id = REACTIONS.get(detector.cls, "?")
+        text = f"FIRING {reaction_id} {detector.remaining}/{detector.effect_frames}"
+    draw_text_box(frame, text, STATE_ORIGIN, STATE_SCALE, STATE_THICKNESS)
+
+
+def draw_reaction_banner(frame, reaction_id):
+    h, w = frame.shape[:2]
+    text = f"REACTION: {reaction_id}"
+    (tw, _), _ = cv2.getTextSize(text, LABEL_FONT, BANNER_SCALE, BANNER_THICKNESS)
+    origin = ((w - tw) // 2, h // 2)
     draw_text_box(
-        frame, text, PAIR_LABEL_ORIGIN, PAIR_LABEL_SCALE, PAIR_LABEL_THICKNESS
+        frame,
+        text,
+        origin,
+        BANNER_SCALE,
+        BANNER_THICKNESS,
+        BANNER_TEXT_COLOR,
+        BANNER_BG_COLOR,
     )
+
+
+class ReactionDetector:
+    IDLE = "IDLE"
+    CANDIDATE = "CANDIDATE"
+    FIRING = "FIRING"
+
+    def __init__(self, debounce_frames=DEBOUNCE_FRAMES, effect_frames=EFFECT_FRAMES):
+        self.debounce_frames = debounce_frames
+        self.effect_frames = effect_frames
+        self.state = self.IDLE
+        self.cls = None
+        self.count = 0
+        self.remaining = 0
+
+    def update(self, active):
+        if self.state == self.FIRING:
+            self.remaining -= 1
+            if self.remaining > 0:
+                return None
+            self.state = self.IDLE
+            self.cls = None
+            self.count = 0
+        if active is None:
+            self.state = self.IDLE
+            self.cls = None
+            self.count = 0
+            return None
+        if active != self.cls:
+            self.state = self.CANDIDATE
+            self.cls = active
+            self.count = 1
+            return None
+        self.count += 1
+        if self.count >= self.debounce_frames:
+            self.state = self.FIRING
+            self.remaining = self.effect_frames
+            return self.cls
+        return None
 
 
 def main():
@@ -129,6 +204,7 @@ def main():
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open camera {CAMERA_INDEX}")
     recognizer = build_recognizer()
+    detector = ReactionDetector()
     try:
         while True:
             ok, frame = cap.read()
@@ -143,9 +219,10 @@ def main():
                 draw_hand(frame, landmarks)
                 handedness, gesture, score = hand_label(result, i)
                 draw_hand_label(frame, landmarks, handedness, gesture, score)
-            pair = pair_key(result)
-            if pair is not None:
-                draw_pair_label(frame, pair)
+            detector.update(active_reaction_class(result))
+            draw_state_indicator(frame, detector)
+            if detector.state == ReactionDetector.FIRING:
+                draw_reaction_banner(frame, REACTIONS[detector.cls])
             cv2.imshow(WINDOW_NAME, frame)
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q") or key == 27:
