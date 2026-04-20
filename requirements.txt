@@ -12,3 +12,4 @@ ultralytics~=8.4.33
 imageio~=2.37.3
 tensorflow-hub~=0.16.1
 tensorflow-metal~=1.2.0
+mediapipe~=0.10.33
