@@ -41,7 +41,6 @@ LABEL_BG = (0, 0, 0)
 
 HAND_LABEL_SCALE = 0.6
 HAND_LABEL_THICKNESS = 1
-HAND_LABEL_OFFSET_Y = 30
 
 STATE_ORIGIN = (10, 30)
 STATE_SCALE = 0.7
@@ -65,24 +64,19 @@ def _text_box(frame, text, origin, scale, thickness, bg=LABEL_BG):
     cv2.putText(frame, text, (x, y), FONT, scale, LABEL_TEXT, thickness, cv2.LINE_AA)
 
 
-def _draw_hand(frame, landmarks):
+def _draw_hand_debug(frame, result, i):
     h, w = frame.shape[:2]
-    points = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
-    for i, j in HAND_CONNECTIONS:
-        cv2.line(frame, points[i], points[j], CONNECTION_COLOR, CONNECTION_THICKNESS)
+    points = [(int(lm.x * w), int(lm.y * h)) for lm in result.hand_landmarks[i]]
+    for a, b in HAND_CONNECTIONS:
+        cv2.line(frame, points[a], points[b], CONNECTION_COLOR, CONNECTION_THICKNESS)
     for x, y in points:
         cv2.circle(frame, (x, y), LANDMARK_RADIUS, LANDMARK_COLOR, -1)
-
-
-def _draw_hand_label(frame, result, i):
     handedness = result.handedness[i][0].category_name if result.handedness[i] else "?"
     gestures = result.gestures[i]
     name, score = (
         (gestures[0].category_name, gestures[0].score) if gestures else ("None", 0.0)
     )
-    h, w = frame.shape[:2]
-    wrist = result.hand_landmarks[i][0]
-    origin = (int(wrist.x * w), int(wrist.y * h) + HAND_LABEL_OFFSET_Y)
+    origin = (points[0][0], points[0][1] + 30)
     _text_box(
         frame,
         f"{handedness} {name} {score:.2f}",
@@ -112,9 +106,8 @@ def _draw_banner(frame, reaction_id):
 
 
 def draw_debug(frame, result, detector, reactions):
-    for i, landmarks in enumerate(result.hand_landmarks):
-        _draw_hand(frame, landmarks)
-        _draw_hand_label(frame, result, i)
+    for i in range(len(result.hand_landmarks)):
+        _draw_hand_debug(frame, result, i)
     _draw_state(frame, detector, reactions)
     if detector.state == detector.FIRING:
         _draw_banner(frame, reactions[detector.cls])

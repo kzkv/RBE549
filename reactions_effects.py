@@ -51,6 +51,9 @@ HEARTS_TINT_STRENGTH = 0.35
 HEARTS_VIGNETTE_STRENGTH = 0.6
 
 
+# Apple Color Emoji ships discrete bitmap strikes; 160 is the largest PIL accepts,
+# so we rasterize there and downscale. The RGBA -> BGRA swap happens once at cache
+# insertion so every per-frame composite is already in OpenCV's native channel order.
 @lru_cache(maxsize=64)
 def emoji_image(char, size):
     font = ImageFont.truetype(EMOJI_FONT_PATH, EMOJI_STRIKE)
@@ -63,6 +66,8 @@ def emoji_image(char, size):
     return bgra
 
 
+# Alpha-over composite written out explicitly: out = fg*a + bg*(1-a). Slice bounds
+# are clipped symmetrically so emojis near a frame edge render their visible portion.
 def paste_rgba(frame, rgba, center, alpha_mul=1.0):
     fh, fw = frame.shape[:2]
     eh, ew = rgba.shape[:2]
@@ -108,6 +113,8 @@ def _fx_thumbs_down(frame, age, lifetime, origin):
     frame[:] = cv2.addWeighted(frame, 1 - env, gray_bgr, env, 0)
 
 
+# np.roll cyclically shifts the frame upward; content off the top wraps to the
+# bottom, producing a seamless loop without any seam handling.
 def _fx_balloons(frame, age, lifetime, origin):
     shift = int(age * BALLOONS_SCROLL_PX)
     if shift > 0:
@@ -121,6 +128,8 @@ def _fx_rain(frame, age, lifetime, origin):
         frame[:] = cv2.GaussianBlur(frame, (0, 0), sigmaX=sigma)
 
 
+# Hash-seeded RNG fixes copy positions for this trigger so copies fade into and
+# out of stable spots rather than flickering in new locations each frame.
 def _fx_confetti(frame, age, lifetime, origin):
     env = math.sin(math.pi * age / lifetime)
     if env <= 0.0:
@@ -139,6 +148,7 @@ def _fx_confetti(frame, age, lifetime, origin):
         cv2.addWeighted(dst, 1 - env, small, env, 0, dst)
 
 
+# Cosine radial falloff, 1 at the center and 0 at the corners, cached per resolution.
 @lru_cache(maxsize=4)
 def _vignette_mask(h, w):
     y, x = np.ogrid[:h, :w]
@@ -170,8 +180,6 @@ FRAME_EFFECTS = {
 
 
 class Particle:
-    __slots__ = ("x", "y", "vx", "vy", "emoji", "age", "lifetime")
-
     def __init__(self, x, y, vx, vy, emoji, lifetime):
         self.x = x
         self.y = y
@@ -185,9 +193,6 @@ class Particle:
         self.x += self.vx
         self.y += self.vy
         self.age += 1
-
-    def alive(self):
-        return self.age < self.lifetime
 
     def draw(self, frame):
         alpha = 1.0 - self.age / self.lifetime
@@ -236,7 +241,7 @@ class EffectManager:
         alive = []
         for p in self.particles:
             p.update()
-            if p.alive():
+            if p.age < p.lifetime:
                 p.draw(frame)
                 alive.append(p)
         self.particles = alive

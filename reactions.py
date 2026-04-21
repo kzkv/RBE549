@@ -40,6 +40,8 @@ def build_recognizer():
     return vision.GestureRecognizer.create_from_options(options)
 
 
+# Returns the unique detected reaction class only if all hands agree. Mixed input
+# (e.g. one Thumb_Up + one Victory) yields None so ambiguous gestures do not fire.
 def active_reaction_class(result):
     names = {
         g[0].category_name
@@ -49,6 +51,8 @@ def active_reaction_class(result):
     return next(iter(names)) if len(names) == 1 else None
 
 
+# IDLE -> CANDIDATE (counting consecutive matching frames) -> FIRING (effect playing,
+# new triggers suppressed). Returns the fired class once on the trigger frame.
 class ReactionDetector:
     IDLE = "IDLE"
     CANDIDATE = "CANDIDATE"
@@ -57,23 +61,22 @@ class ReactionDetector:
     def __init__(self, debounce_frames=DEBOUNCE_FRAMES, effect_frames=EFFECT_FRAMES):
         self.debounce_frames = debounce_frames
         self.effect_frames = effect_frames
+        self.remaining = 0
+        self._reset()
+
+    def _reset(self):
         self.state = self.IDLE
         self.cls = None
         self.count = 0
-        self.remaining = 0
 
     def update(self, active):
         if self.state == self.FIRING:
             self.remaining -= 1
             if self.remaining > 0:
                 return None
-            self.state = self.IDLE
-            self.cls = None
-            self.count = 0
+            self._reset()
         if active is None:
-            self.state = self.IDLE
-            self.cls = None
-            self.count = 0
+            self._reset()
             return None
         if active != self.cls:
             self.state = self.CANDIDATE
