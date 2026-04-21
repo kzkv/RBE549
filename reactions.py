@@ -9,6 +9,7 @@ from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
 from reactions_aux import draw_debug
+from reactions_effects import EffectManager, pick_origin
 
 DEBUG = True
 
@@ -93,6 +94,7 @@ def main():
         raise RuntimeError(f"Cannot open camera {CAMERA_INDEX}")
     recognizer = build_recognizer()
     detector = ReactionDetector()
+    manager = EffectManager()
     try:
         while True:
             ok, frame = cap.read()
@@ -103,7 +105,10 @@ def main():
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             timestamp_ms = int(time.perf_counter() * 1000)
             result = recognizer.recognize_for_video(mp_image, timestamp_ms)
-            detector.update(active_reaction_class(result))
+            fired = detector.update(active_reaction_class(result))
+            if fired:
+                manager.spawn(REACTIONS[fired], pick_origin(result, fired, frame.shape))
+            manager.update_and_draw(frame)
             if DEBUG:
                 draw_debug(frame, result, detector, REACTIONS)
             cv2.imshow(WINDOW_NAME, frame)
