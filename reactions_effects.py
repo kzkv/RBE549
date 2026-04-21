@@ -69,20 +69,15 @@ def paste_rgba(frame, rgba, center, alpha_mul=1.0):
     frame[fy0:fy1, fx0:fx1] = (bgr * alpha + roi * (1 - alpha)).astype(np.uint8)
 
 
-def _palm_center_normalized(landmarks):
-    xs = [landmarks[i].x for i in PALM_LANDMARKS]
-    ys = [landmarks[i].y for i in PALM_LANDMARKS]
-    return sum(xs) / len(xs), sum(ys) / len(ys)
-
-
 def pick_origin(result, fired_class, frame_shape):
     indices = [
         i
         for i, g in enumerate(result.gestures)
         if g and g[0].category_name == fired_class
     ]
-    i = random.choice(indices)
-    nx, ny = _palm_center_normalized(result.hand_landmarks[i])
+    landmarks = result.hand_landmarks[random.choice(indices)]
+    nx = sum(landmarks[i].x for i in PALM_LANDMARKS) / len(PALM_LANDMARKS)
+    ny = sum(landmarks[i].y for i in PALM_LANDMARKS) / len(PALM_LANDMARKS)
     h, w = frame_shape[:2]
     return int(nx * w), int(ny * h)
 
@@ -141,28 +136,3 @@ class EffectManager:
                 p.draw(frame)
                 alive.append(p)
         self.particles = alive
-
-
-if __name__ == "__main__":
-    canvas = np.zeros((600, 1200, 3), dtype=np.uint8)
-    cell_w, cell_h = 400, 300
-    positions = [
-        (cell_w // 2 + c * cell_w, cell_h // 2 + r * cell_h)
-        for r in range(2)
-        for c in range(3)
-    ]
-    for pos, rid in zip(positions, EMOJI.keys()):
-        paste_rgba(canvas, emoji_image(EMOJI[rid], 120), pos)
-        cv2.putText(
-            canvas,
-            rid,
-            (pos[0] - 60, pos[1] + 90),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-    cv2.imshow("effects.py", canvas)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
