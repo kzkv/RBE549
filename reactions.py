@@ -11,7 +11,7 @@ from mediapipe.tasks.python import vision
 from reactions_aux import draw_debug
 from reactions_effects import EffectManager, pick_origin
 
-DEBUG = True
+DEBUG = False
 
 CAMERA_INDEX = 0
 MODEL_PATH = "models/gesture_recognizer.task"

@@ -39,6 +39,17 @@ BIAS = {
 
 PALM_LANDMARKS = (0, 5, 9, 13, 17)
 
+THUMBS_UP_SAT_GAIN = 0.8
+THUMBS_UP_VAL_GAIN = 0.2
+BALLOONS_SCROLL_PX = 15
+RAIN_MAX_SIGMA = 7.0
+CONFETTI_ROI = 600
+CONFETTI_COPY_SIZE = 90
+CONFETTI_COPIES = 8
+HEARTS_PINK_BGR = (180, 105, 255)
+HEARTS_TINT_STRENGTH = 0.35
+HEARTS_VIGNETTE_STRENGTH = 0.6
+
 
 @lru_cache(maxsize=64)
 def emoji_image(char, size):
@@ -82,6 +93,82 @@ def pick_origin(result, fired_class, frame_shape):
     return int(nx * w), int(ny * h)
 
 
+def _fx_thumbs_up(frame, age, lifetime, origin):
+    env = math.sin(math.pi * age / lifetime)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[..., 1] = np.minimum(hsv[..., 1] * (1 + env * THUMBS_UP_SAT_GAIN), 255)
+    hsv[..., 2] = np.minimum(hsv[..., 2] * (1 + env * THUMBS_UP_VAL_GAIN), 255)
+    frame[:] = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+
+def _fx_thumbs_down(frame, age, lifetime, origin):
+    env = math.sin(math.pi * age / lifetime)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    frame[:] = cv2.addWeighted(frame, 1 - env, gray_bgr, env, 0)
+
+
+def _fx_balloons(frame, age, lifetime, origin):
+    shift = int(age * BALLOONS_SCROLL_PX)
+    if shift > 0:
+        frame[:] = np.roll(frame, -shift, axis=0)
+
+
+def _fx_rain(frame, age, lifetime, origin):
+    env = math.sin(math.pi * age / lifetime)
+    sigma = env * RAIN_MAX_SIGMA
+    if sigma > 0.1:
+        frame[:] = cv2.GaussianBlur(frame, (0, 0), sigmaX=sigma)
+
+
+def _fx_confetti(frame, age, lifetime, origin):
+    env = math.sin(math.pi * age / lifetime)
+    if env <= 0.0:
+        return
+    h, w = frame.shape[:2]
+    ox, oy = origin
+    x0 = max(0, min(w - CONFETTI_ROI, ox - CONFETTI_ROI // 2))
+    y0 = max(0, min(h - CONFETTI_ROI, oy - CONFETTI_ROI // 2))
+    patch = frame[y0 : y0 + CONFETTI_ROI, x0 : x0 + CONFETTI_ROI].copy()
+    small = cv2.resize(patch, (CONFETTI_COPY_SIZE, CONFETTI_COPY_SIZE))
+    rng = random.Random(hash(origin))
+    for _ in range(CONFETTI_COPIES):
+        px = rng.randint(0, w - CONFETTI_COPY_SIZE)
+        py = rng.randint(0, h - CONFETTI_COPY_SIZE)
+        dst = frame[py : py + CONFETTI_COPY_SIZE, px : px + CONFETTI_COPY_SIZE]
+        cv2.addWeighted(dst, 1 - env, small, env, 0, dst)
+
+
+@lru_cache(maxsize=4)
+def _vignette_mask(h, w):
+    y, x = np.ogrid[:h, :w]
+    cx, cy = w / 2, h / 2
+    dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+    max_dist = np.sqrt(cx**2 + cy**2)
+    return ((np.cos(np.pi * dist / max_dist) + 1) / 2).astype(np.float32)
+
+
+def _fx_hearts(frame, age, lifetime, origin):
+    env = math.sin(math.pi * age / lifetime)
+    h, w = frame.shape[:2]
+    pink = np.full_like(frame, HEARTS_PINK_BGR)
+    tinted = cv2.addWeighted(
+        frame, 1 - HEARTS_TINT_STRENGTH * env, pink, HEARTS_TINT_STRENGTH * env, 0
+    )
+    mask = 1 - (1 - _vignette_mask(h, w)) * HEARTS_VIGNETTE_STRENGTH * env
+    frame[:] = (tinted.astype(np.float32) * mask[:, :, None]).astype(np.uint8)
+
+
+FRAME_EFFECTS = {
+    "thumbs_up": _fx_thumbs_up,
+    "thumbs_down": _fx_thumbs_down,
+    "balloons": _fx_balloons,
+    "rain": _fx_rain,
+    "confetti": _fx_confetti,
+    "hearts": _fx_hearts,
+}
+
+
 class Particle:
     __slots__ = ("x", "y", "vx", "vy", "emoji", "age", "lifetime")
 
@@ -112,6 +199,9 @@ class Particle:
 class EffectManager:
     def __init__(self):
         self.particles = []
+        self.frame_effect = None
+        self.frame_effect_age = 0
+        self.frame_effect_origin = None
 
     def spawn(self, reaction_id, origin):
         emoji = emoji_image(EMOJI[reaction_id], EMOJI_DISPLAY_SIZE)
@@ -127,8 +217,22 @@ class EffectManager:
             self.particles.append(
                 Particle(cx + jx, cy + jy, vx, vy, emoji, LIFETIME_FRAMES)
             )
+        self.frame_effect = FRAME_EFFECTS[reaction_id]
+        self.frame_effect_age = 0
+        self.frame_effect_origin = origin
 
     def update_and_draw(self, frame):
+        if self.frame_effect is not None:
+            self.frame_effect(
+                frame,
+                self.frame_effect_age,
+                LIFETIME_FRAMES,
+                self.frame_effect_origin,
+            )
+            self.frame_effect_age += 1
+            if self.frame_effect_age >= LIFETIME_FRAMES:
+                self.frame_effect = None
+                self.frame_effect_origin = None
         alive = []
         for p in self.particles:
             p.update()
